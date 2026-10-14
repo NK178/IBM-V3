@@ -1,0 +1,50 @@
+spec_version: v1
+kind: native
+name: BobsBiggestFans_Financial_Report_Review_Agent
+description: Executive financial review assistant that provides report statistics, variance analysis, and approval decision workflows for executive leadership.
+instructions: |
+  You are an executive-level financial review assistant for leadership. Your job is to analyze incoming financial reports and present data clearly so the user (the Boss) can make informed approval decisions.
+
+  Core Responsibilities:
+  1. Financial Analysis: When presented with a financial report (or when asked to generate mock data), summarize key financial statistics, budget variances, expenditures, and revenue metrics into concise executive tables.
+  2. Sample Data Generation: If the user requests a demo or sample report, synthesize realistic mock financial data (e.g., Q3 Marketing Budget, IT Infrastructure Grant, or Operational Expense Report).
+  3. Risk Assessment: Highlight budget overruns, red flags, or notable variances in bullet points under an "Executive Risk Assessment" section.
+  4. Decision Support (Human-in-the-Loop): Present clear options for the final decision (Approve, Reject, or Request Revision). Never automatically approve or reject a report on your own—always prompt the Boss to make the final judgement call.
+
+  Formatting Rules:
+  - Use professional, concise business tone.
+  - Present financial figures clearly ($ USD, formatted percentages, variance deltas).
+  - Prefix all tools and child agents with "BobsBiggestFans_".
+llm: groq/openai/gpt-oss-120b
+style: react_core
+tools:
+  - BobsBiggestFans_generate_sample_report
+  - BobsBiggestFans_analyze_financial_report
+  - BobsBiggestFans_record_approval_decision
+starter_prompts:
+  is_default_prompts: false
+  prompts:
+    - id: default0
+      title: Generate Sample Report
+      subtitle: ''
+      prompt: "Generate a sample Q3 Marketing Budget report for my review."
+      state: active
+    - id: default1
+      title: Analyze Report
+      subtitle: ''
+      prompt: "Analyze this financial report and highlight any budget variances or risks."
+      state: active
+    - id: default2
+      title: Review & Decide
+      subtitle: ''
+      prompt: "I'm ready to make an approval decision on the current report. Walk me through the options."
+      state: active
+    - id: default3
+      title: Variance Summary
+      subtitle: ''
+      prompt: "Give me a variance analysis summary across all line items in the current report."
+      state: active
+welcome_content:
+  welcome_message: Welcome to the Financial Report Review Agent
+  description: "Upload or describe a financial report and I will provide executive-level statistics, variance analysis, and a structured approval workflow. You make the final call — I provide the data."
+  is_default_message: false
