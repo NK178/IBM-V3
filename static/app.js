@@ -374,3 +374,173 @@ function escHtml(str) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+/* ── Approval Routing Card ── */
+
+/**
+ * Tier definitions.
+ * Each tier carries: label, badgeClass, approvers[], nextActionLabel,
+ * and optional dualSig flag for the two-step tracker.
+ */
+const APPROVAL_TIERS = {
+  'auto': {
+    label:           'Auto-Clear',
+    badgeClass:      'tier-auto',
+    approvers:       ['System Auto-Approval'],
+    nextAction:      'Mark as Cleared',
+    dualSig:         false,
+  },
+  'standard': {
+    label:           'Standard',
+    badgeClass:      'tier-standard',
+    approvers:       ['CFO', 'Finance Director'],
+    nextAction:      'Submit for Approval',
+    dualSig:         false,
+  },
+  'dual': {
+    label:           'Dual-Sig',
+    badgeClass:      'tier-dual',
+    approvers:       ['CFO', 'VP Finance'],
+    nextAction:      'Awaiting VP Signature',
+    dualSig:         true,
+  },
+};
+
+/** Derive approval tier from a report object returned by the API */
+function deriveTier(report) {
+  const status = (report.status || '').toLowerCase();
+  // Already actioned reports → auto display
+  if (status === 'accepted' || status === 'approved') return 'auto';
+
+  const title = (report.title || '').toLowerCase();
+  // Security / compliance → dual-sig
+  if (title.includes('security') || title.includes('compliance') || title.includes('annual')) return 'dual';
+  // Default → standard
+  return 'standard';
+}
+
+/** Current routing state (updated when a report is fetched) */
+let _currentTier = null;
+let _currentReport = null;
+
+/** Render the routing card for a given tier key */
+function renderApprovalCard(tierKey, report) {
+  _currentTier   = tierKey;
+  _currentReport = report;
+
+  const tier      = APPROVAL_TIERS[tierKey];
+  const badge     = document.getElementById('tier-badge');
+  const list      = document.getElementById('approvers-list');
+  const tracker   = document.getElementById('dual-sig-tracker');
+  const nextBtn   = document.getElementById('approval-next-btn');
+
+  // Tier badge
+  badge.textContent = tier.label;
+  badge.className   = 'tier-badge ' + tier.badgeClass;
+
+  // Approvers list
+  list.innerHTML = tier.approvers
+    .map(a => `<li>${escHtml(a)}</li>`)
+    .join('');
+
+  // Dual-sig tracker visibility
+  if (tier.dualSig) {
+    tracker.classList.remove('hidden');
+  } else {
+    tracker.classList.add('hidden');
+  }
+
+  // Next-action button
+  nextBtn.disabled    = false;
+  nextBtn.textContent = tier.nextAction;
+
+  // For dual-sig, style the button as warning-toned while VP is still pending
+  if (tier.dualSig) {
+    nextBtn.style.background = 'rgba(245,158,11,0.8)';
+  } else {
+    nextBtn.style.background = '';   // fall back to CSS default (accent)
+  }
+}
+
+/** Reset card to idle state (no report selected) */
+function resetApprovalCard() {
+  _currentTier   = null;
+  _currentReport = null;
+
+  const badge   = document.getElementById('tier-badge');
+  const list    = document.getElementById('approvers-list');
+  const tracker = document.getElementById('dual-sig-tracker');
+  const nextBtn = document.getElementById('approval-next-btn');
+
+  badge.textContent = '—';
+  badge.className   = 'tier-badge tier-none';
+  list.innerHTML    = '';
+  tracker.classList.add('hidden');
+  nextBtn.disabled    = true;
+  nextBtn.textContent = 'Select a report first';
+  nextBtn.style.background = '';
+}
+
+/** Called by the Next-Action button */
+function approvalNextAction() {
+  if (!_currentTier || !_currentReport) return;
+  const tier = APPROVAL_TIERS[_currentTier];
+
+  if (_currentTier === 'auto') {
+    showToast('Report auto-cleared — no manual signature required.', 'success');
+  } else if (_currentTier === 'standard') {
+    showToast(`Submitted "${escHtml(_currentReport.title)}" to CFO & Finance Director.`, 'success');
+  } else if (_currentTier === 'dual') {
+    // Simulate advancing VP step
+    const vpDot    = document.querySelector('#tracker-step-vp .step-dot');
+    const vpStatus = document.querySelector('#tracker-step-vp .step-status');
+    const conn     = document.querySelector('.tracker-connector');
+    const nextBtn  = document.getElementById('approval-next-btn');
+
+    vpDot.className      = 'step-dot step-done';
+    vpDot.textContent    = '✓';
+    vpStatus.className   = 'step-status step-status-done';
+    vpStatus.textContent = 'Signed';
+    conn.style.background = 'var(--success)';
+
+    nextBtn.textContent       = 'Dual-Sig Complete';
+    nextBtn.style.background  = 'var(--success)';
+    nextBtn.disabled          = true;
+    showToast('VP Finance signature recorded — dual-sig complete.', 'success');
+  }
+}
+
+// ── Hook into existing fetch flows ──
+
+// Patch fetchReport so the card updates after a report loads
+const _origFetchReport = fetchReport;
+fetchReport = async function () {
+  await _origFetchReport();
+  // After DOM update, read the rendered report title from the output heading
+  const heading = document.querySelector('#report-output .report-card h4');
+  if (heading) {
+    const fakeReport = { title: heading.textContent, status: 'Pending Review' };
+    const id = document.getElementById('report-id-select').value;
+    // Report 103 is the Annual Security Compliance Review → dual-sig
+    const tierKey = id === '103' ? 'dual' : id === '101' ? 'standard' : 'auto';
+    renderApprovalCard(tierKey, fakeReport);
+  }
+};
+
+// Patch generateFinancialReport so the card updates after analysis
+const _origGenFinancial = generateFinancialReport;
+generateFinancialReport = async function () {
+  await _origGenFinancial();
+  const banner = document.querySelector('#financial-output .status-banner');
+  if (banner) {
+    const text = banner.textContent || '';
+    const fakeReport = { title: text, status: 'Pending Review' };
+    const tier = text.toLowerCase().includes('critical') ? 'dual'
+               : text.toLowerCase().includes('scrutiny') ? 'standard'
+               : 'auto';
+    renderApprovalCard(tier, fakeReport);
+  }
+};
+
+// Initialise card in idle state on page load
+resetApprovalCard();

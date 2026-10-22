@@ -30,6 +30,41 @@
         <span class="nav-icon">&#9989;</span> Approve / Reject
       </button>
     </nav>
+    <!-- ── Approval Routing Card ── -->
+    <div class="approval-card" id="approval-card">
+      <div class="approval-card-header">
+        <span class="approval-card-title">Approval Routing</span>
+        <span class="tier-badge" id="tier-badge">—</span>
+      </div>
+
+      <div class="approval-approvers" id="approval-approvers">
+        <div class="approvers-label">Required Approvers</div>
+        <ul class="approvers-list" id="approvers-list"></ul>
+      </div>
+
+      <!-- Dual-sig two-step tracker (hidden unless Dual-Sig tier) -->
+      <div class="dual-sig-tracker hidden" id="dual-sig-tracker">
+        <div class="tracker-label">Signature Progress</div>
+        <div class="tracker-steps">
+          <div class="tracker-step" id="tracker-step-cfo">
+            <span class="step-dot step-done">&#10003;</span>
+            <span class="step-name">CFO</span>
+            <span class="step-status step-status-done">Signed</span>
+          </div>
+          <div class="tracker-connector"></div>
+          <div class="tracker-step" id="tracker-step-vp">
+            <span class="step-dot step-pending"></span>
+            <span class="step-name">VP Finance</span>
+            <span class="step-status step-status-pending">Pending</span>
+          </div>
+        </div>
+      </div>
+
+      <button class="approval-next-btn" id="approval-next-btn" onclick="approvalNextAction()">
+        Select a report first
+      </button>
+    </div>
+
     <div class="sidebar-footer">
       <span>Executive Dashboard</span>
     </div>
