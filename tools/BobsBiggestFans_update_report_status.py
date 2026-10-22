@@ -1,7 +1,31 @@
 from ibm_watsonx_orchestrate.agent_builder.tools import tool, ToolPermission
+from ibm_watsonx_orchestrate.agent_builder.connections import ConnectionType
+from ibm_watsonx_orchestrate.run import connections
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime, timezone
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# Report and approval state lives in the shared store behind the Render web app
+# (app.py + store.py), so the chat and the dashboard always agree.
+# The base URL comes from the key_value connection below, key "base_url".
+APP_ID = "bobs_report_api"
+
+
+def _api(method: str, path: str, params: Optional[dict] = None, body: Optional[dict] = None) -> dict:
+    base = connections.key_value(APP_ID)["base_url"].rstrip("/")
+    url = f"{base}{path}" + (f"?{urllib.parse.urlencode(params)}" if params else "")
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        # Generous timeout: a sleeping Render free instance can take ~50s to wake up.
+        with urllib.request.urlopen(req, timeout=75) as resp:
+            return json.loads(resp.read())
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise RuntimeError(f"Report service is unavailable ({e}). Try again in a minute.") from e
 
 
 class ReportStatusUpdate(BaseModel):
@@ -15,37 +39,10 @@ class ReportStatusUpdate(BaseModel):
     confirmation_message: str
 
 
-# Inline mock store — mutable dict simulating a persistent store within a session.
-# Kept in sync with BobsBiggestFans_get_report.py and BobsBiggestFans_compare_reports.py.
-_MOCK_REPORTS: dict[int, dict] = {
-    101: {
-        "report_id": 101,
-        "title": "Q3 System Performance Audit",
-        "date": "2026-09-15",
-        "status": "Pending Review",
-        "summary": "CPU utilization averaged 68%, memory peak at 82%, zero unauthorized access attempts detected.",
-        "recommendation": "Upgrade server pool B prior to Q4 traffic spikes.",
-    },
-    102: {
-        "report_id": 102,
-        "title": "Q4 System Performance Audit",
-        "date": "2026-10-15",
-        "status": "Pending Review",
-        "summary": "CPU utilization averaged 84%, memory peak at 94%, 2 minor latency warnings detected.",
-        "recommendation": "Immediate scaling of server pool B required.",
-    },
-    103: {
-        "report_id": 103,
-        "title": "Annual Security Compliance Review",
-        "date": "2026-10-01",
-        "status": "Approved",
-        "summary": "Fully compliant with ISO/IEC 27001 standards.",
-        "recommendation": "Maintain current access control policies.",
-    },
-}
-
-
-@tool(permission=ToolPermission.WRITE_ONLY)
+@tool(
+    permission=ToolPermission.WRITE_ONLY,
+    expected_credentials=[{"app_id": APP_ID, "type": ConnectionType.KEY_VALUE}],
+)
 def BobsBiggestFans_update_report_status(
     report_id: int,
     decision: str,
@@ -60,54 +57,5 @@ def BobsBiggestFans_update_report_status(
     Returns:
         ReportStatusUpdate: Confirmation record showing the previous status, new status, decision, and a confirmation message.
     """
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    report = _MOCK_REPORTS.get(report_id)
-    if report is None:
-        return ReportStatusUpdate(
-            report_id=report_id,
-            report_title="Report Not Found",
-            previous_status="N/A",
-            new_status="N/A",
-            decision=decision,
-            reason=reason,
-            timestamp_utc=timestamp,
-            confirmation_message=(
-                f"❌ Report {report_id} was not found in the data store. "
-                "Please use a valid report ID (101, 102, or 103)."
-            ),
-        )
-
-    normalized = decision.strip().title()
-    if normalized not in {"Accept", "Decline"}:
-        normalized = "Decline"
-
-    previous_status = report["status"]
-    new_status = "Accepted" if normalized == "Accept" else "Declined"
-
-    # Mutate the in-session store so subsequent get_report / compare_reports
-    # calls within the same invocation reflect the change.
-    report["status"] = new_status
-
-    if normalized == "Accept":
-        confirmation = (
-            f"✅ Report {report_id} has been accepted and logged successfully. "
-            f"Status updated from \"{previous_status}\" to \"{new_status}\" at {timestamp}."
-        )
-    else:
-        reason_suffix = f" Reason provided: \"{reason}\"." if reason else ""
-        confirmation = (
-            f"🚫 Report {report_id} has been marked as declined.{reason_suffix} "
-            f"Status updated from \"{previous_status}\" to \"{new_status}\" at {timestamp}."
-        )
-
-    return ReportStatusUpdate(
-        report_id=report_id,
-        report_title=report["title"],
-        previous_status=previous_status,
-        new_status=new_status,
-        decision=normalized,
-        reason=reason,
-        timestamp_utc=timestamp,
-        confirmation_message=confirmation,
-    )
+    return ReportStatusUpdate(**_api("POST", "/api/update_report_status",
+                                     body={"report_id": report_id, "decision": decision, "reason": reason}))

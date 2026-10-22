@@ -2,37 +2,25 @@ from flask import Flask, request, jsonify, render_template
 from datetime import datetime, timezone
 import json
 
+import store
+
 app = Flask(__name__)
 
-# ---------------------------------------------------------------------------
-# In-memory mock data store (session-scoped, resets on restart)
-# ---------------------------------------------------------------------------
-MOCK_REPORTS = {
-    101: {
-        "report_id": 101,
-        "title": "Q3 System Performance Audit",
-        "date": "2026-09-15",
-        "status": "Pending Review",
-        "summary": "CPU utilization averaged 68%, memory peak at 82%, zero unauthorized access attempts detected.",
-        "recommendation": "Upgrade server pool B prior to Q4 traffic spikes.",
-    },
-    102: {
-        "report_id": 102,
-        "title": "Q4 System Performance Audit",
-        "date": "2026-10-15",
-        "status": "Pending Review",
-        "summary": "CPU utilization averaged 84%, memory peak at 94%, 2 minor latency warnings detected.",
-        "recommendation": "Immediate scaling of server pool B required.",
-    },
-    103: {
-        "report_id": 103,
-        "title": "Annual Security Compliance Review",
-        "date": "2026-10-01",
-        "status": "Approved",
-        "summary": "Fully compliant with ISO/IEC 27001 standards.",
-        "recommendation": "Maintain current access control policies.",
-    },
-}
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _not_found_report(report_id: int, title: str = "Report Not Found") -> dict:
+    valid = ", ".join(str(r["report_id"]) for r in store.list_reports())
+    return {
+        "report_id": report_id,
+        "title": title,
+        "date": "N/A",
+        "status": "Not Found",
+        "summary": f"No report with ID {report_id} exists in the data store.",
+        "recommendation": f"Please request a valid report ID ({valid}).",
+    }
 
 FINANCIAL_TEMPLATES = {
     "Q3 Marketing Budget": [
@@ -65,9 +53,15 @@ FINANCIAL_TEMPLATES = {
 # Routes
 # ---------------------------------------------------------------------------
 
+
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/healthz")
+def healthz():
+    return "ok"
 
 
 @app.route("/api/get_report", methods=["GET"])
@@ -76,25 +70,14 @@ def get_report():
         report_id = int(request.args.get("report_id", 0))
     except ValueError:
         return jsonify({"error": "Invalid report_id"}), 400
-
-    report = MOCK_REPORTS.get(report_id)
-    if report is None:
-        return jsonify({
-            "report_id": report_id,
-            "title": "Report Not Found",
-            "date": "N/A",
-            "status": "Not Found",
-            "summary": f"No report with ID {report_id} exists in the data store.",
-            "recommendation": "Please request a valid report ID (101, 102, or 103).",
-        })
-    return jsonify(report)
+    return jsonify(store.get_report(report_id) or _not_found_report(report_id))
 
 
 @app.route("/api/list_reports", methods=["GET"])
 def list_reports():
     return jsonify([
         {"report_id": r["report_id"], "title": r["title"], "date": r["date"], "status": r["status"]}
-        for r in MOCK_REPORTS.values()
+        for r in store.list_reports()
     ])
 
 
@@ -106,13 +89,8 @@ def compare_reports():
     except ValueError:
         return jsonify({"error": "Invalid report IDs"}), 400
 
-    def not_found(rid):
-        return {"report_id": rid, "title": f"Report {rid} Not Found",
-                "date": "N/A", "status": "Not Found",
-                "summary": f"No report with ID {rid} exists.", "recommendation": "N/A"}
-
-    a = MOCK_REPORTS.get(id_a) or not_found(id_a)
-    b = MOCK_REPORTS.get(id_b) or not_found(id_b)
+    a = store.get_report(id_a) or _not_found_report(id_a, f"Report {id_a} Not Found")
+    b = store.get_report(id_b) or _not_found_report(id_b, f"Report {id_b} Not Found")
 
     fields = ["title", "date", "status", "summary", "recommendation"]
     diffs = [
@@ -148,32 +126,31 @@ def compare_reports():
 
 @app.route("/api/update_report_status", methods=["POST"])
 def update_report_status():
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     try:
         report_id = int(data.get("report_id", 0))
-    except ValueError:
+    except (TypeError, ValueError):
         return jsonify({"error": "Invalid report_id"}), 400
 
     decision = str(data.get("decision", "")).strip().title()
-    reason = data.get("reason")
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    reason = data.get("reason") or None
+    timestamp = _now()
 
-    report = MOCK_REPORTS.get(report_id)
-    if report is None:
+    if decision not in {"Accept", "Decline"}:
+        decision = "Decline"
+    new_status = "Accepted" if decision == "Accept" else "Declined"
+
+    result = store.set_report_status(report_id, new_status)
+    if result is None:
+        valid = ", ".join(str(r["report_id"]) for r in store.list_reports())
         return jsonify({
             "report_id": report_id, "report_title": "Report Not Found",
             "previous_status": "N/A", "new_status": "N/A",
             "decision": decision, "reason": reason, "timestamp_utc": timestamp,
-            "confirmation_message": f"Report {report_id} was not found. Use a valid ID (101, 102, or 103).",
+            "confirmation_message": f"Report {report_id} was not found. Use a valid ID ({valid}).",
         })
 
-    if decision not in {"Accept", "Decline"}:
-        decision = "Decline"
-
-    previous_status = report["status"]
-    new_status = "Accepted" if decision == "Accept" else "Declined"
-    report["status"] = new_status
-
+    report, previous_status = result
     if decision == "Accept":
         msg = f"Report {report_id} has been accepted. Status updated from \"{previous_status}\" to \"{new_status}\" at {timestamp}."
     else:
@@ -187,6 +164,19 @@ def update_report_status():
         "timestamp_utc": timestamp, "confirmation_message": msg,
     })
 
+
+@app.route("/api/reset", methods=["POST"])
+def reset():
+    """Restore the seed data and clear pending signatures (use before a demo).
+
+    If the RESET_KEY env var is set, the request must send it as the X-Reset-Key header.
+    """
+    import os
+    key = os.environ.get("RESET_KEY")
+    if key and request.headers.get("X-Reset-Key") != key:
+        return jsonify({"error": "Forbidden"}), 403
+    store.reset()
+    return jsonify({"ok": True, "reports": store.list_reports()})
 
 @app.route("/api/generate_sample_report", methods=["GET"])
 def generate_sample_report():
@@ -303,52 +293,156 @@ def analyze_financial_report():
     })
 
 
+
+# ---------------------------------------------------------------------------
+# Approval decisions (single approver + dual signature)
+# ---------------------------------------------------------------------------
+_DUAL_SIG_ROLES = ("CFO", "VP Finance")
+
+_NEXT_STEPS = {
+    "Approved": [
+        "Finance team notified of executive approval.",
+        "Report archived to compliance records.",
+        "Budget release authorized — department leads may proceed with spend.",
+        "Approval confirmation sent to stakeholders.",
+    ],
+    "Rejected": [
+        "Department head notified of rejection with executive notes.",
+        "Report returned to originator with required corrections.",
+        "Revised report must be resubmitted within 5 business days.",
+        "Finance team placed on hold — no budget release until re-approval.",
+    ],
+    "Revision Requested": [
+        "Revision request sent to report owner with executive feedback.",
+        "Department has 3 business days to address flagged items.",
+        "Revised report will be re-queued for executive review.",
+        "Budget on hold pending resubmission and re-approval.",
+    ],
+}
+
+
+def _signer_role(decided_by: str) -> str | None:
+    """Map a free-text signer ('CFO', 'Jane Tan, VP Finance', ...) to a dual-sig role."""
+    s = decided_by.upper()
+    if "CFO" in s or "CHIEF FINANCIAL" in s:
+        return "CFO"
+    if "VP" in s or "VICE PRESIDENT" in s:
+        return "VP Finance"
+    return None
+
+
+def _record(report_title, decision, decided_by, timestamp, notes, next_steps, message,
+            complete=False, pending=None):
+    return jsonify({
+        "report_title": report_title, "decision": decision, "decided_by": decided_by,
+        "timestamp_utc": timestamp, "notes": notes, "next_steps": next_steps,
+        "confirmation_message": message,
+        "dual_signature_complete": complete, "pending_cosignatory": pending,
+    })
+
+
+@app.route("/api/pending_signatures", methods=["GET"])
+def pending_signatures():
+    return jsonify(store.list_pending_signatures())
+
+
 @app.route("/api/record_approval_decision", methods=["POST"])
 def record_approval_decision():
-    data = request.get_json() or {}
-    report_title = data.get("report_title", "Untitled Report")
-    decision = str(data.get("decision", "")).strip().title()
-    decided_by = data.get("decided_by", "Executive")
-    notes = data.get("notes")
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    data = request.get_json(silent=True) or {}
+    report_title = str(data.get("report_title") or "Untitled Report").strip()
+    decided_by = str(data.get("decided_by") or "Executive").strip()
+    notes = data.get("notes") or None
+    dual = bool(data.get("requires_dual_signature", False))
+    timestamp = _now()
 
-    valid = {"Approved", "Rejected", "Revision Requested"}
-    if decision not in valid:
+    decision = str(data.get("decision", "")).strip().title()
+    if decision not in _NEXT_STEPS:
         decision = "Revision Requested"
 
-    next_steps_map = {
-        "Approved": [
-            "Finance team notified of executive approval.",
-            "Report archived to compliance records.",
-            "Budget release authorized — department leads may proceed with spend.",
-            "Approval confirmation sent to stakeholders.",
-        ],
-        "Rejected": [
-            "Department head notified of rejection with executive notes.",
-            "Report returned to originator with required corrections.",
-            "Revised report must be resubmitted within 5 business days.",
-            "Finance team placed on hold — no budget release until re-approval.",
-        ],
-        "Revision Requested": [
-            "Revision request sent to report owner with executive feedback.",
-            "Department has 3 business days to address flagged items.",
-            "Revised report will be re-queued for executive review.",
-            "Budget on hold pending resubmission and re-approval.",
-        ],
-    }
+    # ---------------- dual-signature approval ----------------
+    if dual and decision == "Approved":
+        role = _signer_role(decided_by)
+        pending = store.get_pending_signature(report_title)
 
-    msg_map = {
-        "Approved": f"APPROVED — '{report_title}' has been approved by {decided_by} on {timestamp}.",
-        "Rejected": f"REJECTED — '{report_title}' has been rejected by {decided_by} on {timestamp}.",
-        "Revision Requested": f"REVISION REQUESTED — '{report_title}' requires revision per {decided_by} on {timestamp}.",
-    }
+        if role is None:
+            awaiting = None
+            if pending:
+                awaiting = next(r for r in _DUAL_SIG_ROLES if r != pending["first_role"])
+            return _record(
+                report_title, "Signature Not Accepted", decided_by, timestamp, notes,
+                [f"Dual-signature approvals must be signed by the {' and the '.join(_DUAL_SIG_ROLES)}.",
+                 f"'{decided_by}' is not one of these roles, so no signature was recorded."],
+                f"⚠️ SIGNATURE NOT ACCEPTED — '{decided_by}' is not authorised to sign a dual-signature "
+                f"approval for '{report_title}'. Only the CFO or VP Finance can sign.",
+                pending=awaiting,
+            )
 
-    return jsonify({
-        "report_title": report_title, "decision": decision,
-        "decided_by": decided_by, "timestamp_utc": timestamp,
-        "notes": notes, "next_steps": next_steps_map[decision],
-        "confirmation_message": msg_map[decision],
-    })
+        if pending is None:
+            store.add_pending_signature(report_title, decided_by, role, timestamp, notes)
+            awaiting = next(r for r in _DUAL_SIG_ROLES if r != role)
+            return _record(
+                report_title, "Pending Second Signature", decided_by, timestamp, notes,
+                [f"First signature recorded from **{decided_by}** at {timestamp}.",
+                 f"Awaiting countersignature from **{awaiting}** to complete dual-signature approval.",
+                 "Budget release is on hold until both signatures are captured.",
+                 f"Notify {awaiting} to review and countersign at their earliest convenience."],
+                f"🖊️ FIRST SIGNATURE RECORDED — '{report_title}' has been signed by **{decided_by}** "
+                f"on {timestamp}. Awaiting countersignature from **{awaiting}** before clearance can be issued.",
+                pending=awaiting,
+            )
+
+        if role == pending["first_role"]:
+            awaiting = next(r for r in _DUAL_SIG_ROLES if r != role)
+            return _record(
+                report_title, "Pending Second Signature", pending["first_signer"], pending["first_timestamp"],
+                pending["notes"],
+                [f"The {role} already signed at {pending['first_timestamp']} ({pending['first_signer']}).",
+                 f"A second signature must come from the **{awaiting}**, not the {role} again."],
+                f"⚠️ DUPLICATE SIGNATURE — the {role} has already signed '{report_title}'. "
+                f"Still awaiting countersignature from **{awaiting}**.",
+                pending=awaiting,
+            )
+
+        store.clear_pending_signature(report_title)
+        first_signer, first_ts = pending["first_signer"], pending["first_timestamp"]
+        combined_notes = "; ".join(filter(None, [pending.get("notes"), notes])) or None
+        return _record(
+            report_title, "Approved", f"{first_signer} + {decided_by}", timestamp, combined_notes,
+            [f"First signature: **{first_signer}** at {first_ts}.",
+             f"Second signature: **{decided_by}** at {timestamp}.",
+             "Dual-signature approval complete — budget release authorised.",
+             "Finance team notified; report archived to compliance records.",
+             "Approval confirmation dispatched to all stakeholders."],
+            f"✅ DUAL-SIGNATURE APPROVED — '{report_title}' has been co-signed by "
+            f"**{first_signer}** and **{decided_by}**. "
+            "Both signatures captured. Budget release authorised and stakeholders notified.",
+            complete=True,
+        )
+
+    # A rejection or revision request cancels any half-finished dual signature.
+    if dual:
+        store.clear_pending_signature(report_title)
+
+    # ---------------- single approver ----------------
+    messages = {
+        "Approved": (
+            f"✅ APPROVED — '{report_title}' has been approved by {decided_by} on {timestamp}. "
+            "Budget release authorized. Confirmation dispatched to stakeholders."
+        ),
+        "Rejected": (
+            f"❌ REJECTED — '{report_title}' has been rejected by {decided_by} on {timestamp}. "
+            "The report has been returned to the originator with required corrections."
+        ),
+        "Revision Requested": (
+            f"🔄 REVISION REQUESTED — '{report_title}' requires revision per {decided_by} on {timestamp}. "
+            "The report owner has been notified and must resubmit within 3 business days."
+        ),
+    }
+    return _record(
+        report_title, decision, decided_by, timestamp, notes,
+        _NEXT_STEPS[decision], messages[decision],
+        complete=(decision == "Approved"),
+    )
 
 
 if __name__ == "__main__":
