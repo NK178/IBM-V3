@@ -6,9 +6,16 @@ import hmac
 import io
 import json
 import os
+import logging
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import store
 from chat_auth import bp as chat_bp
+
+log = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.register_blueprint(chat_bp)
@@ -344,6 +351,110 @@ def _parse_xlsx_bytes(data: bytes) -> tuple[list[dict], list[str]]:
 # Email ingest (Mailgun inbound routing webhook)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Notifications — email (Mailgun) + Slack
+# ---------------------------------------------------------------------------
+# All notification env vars are optional; each channel is silently skipped when
+# its credentials are absent so the app works locally without configuration.
+
+def _notify_second_signer(
+    report_title: str,
+    first_signer: str,
+    awaiting_role: str,
+    sla_due: str,
+    timestamp: str,
+) -> None:
+    """Fire email + Slack notifications for a 'Pending Second Signature' event.
+
+    Runs in a background thread so the API response is never delayed.
+    Required env vars (all optional — omit to disable that channel):
+      MAILGUN_API_KEY    — Mailgun private API key
+      MAILGUN_DOMAIN     — Mailgun sending domain  (e.g. mg.example.com)
+      NOTIFICATION_EMAIL_TO — comma-separated recipient(s) for the alert email
+      SLACK_WEBHOOK_URL  — Incoming Webhook URL for a Slack channel
+    """
+    subject = f"[Action Required] Second signature needed: {report_title}"
+    body_text = (
+        f"A dual-signature approval for '{report_title}' is pending your review.\n\n"
+        f"First signature: {first_signer}\n"
+        f"Required next:   {awaiting_role}\n"
+        f"SLA due:         {sla_due} (3 business days)\n"
+        f"Recorded at:     {timestamp}\n\n"
+        "Please countersign via the Financial Report Review Agent at your earliest convenience."
+    )
+    body_html = (
+        f"<p>A dual-signature approval for <strong>{report_title}</strong> is pending your review.</p>"
+        f"<table style='border-collapse:collapse;font-family:sans-serif'>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#555'>First signature</td><td><strong>{first_signer}</strong></td></tr>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#555'>Required next</td><td><strong>{awaiting_role}</strong></td></tr>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#555'>SLA due</td><td><strong>{sla_due}</strong> (3 business days)</td></tr>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#555'>Recorded at</td><td>{timestamp}</td></tr>"
+        f"</table>"
+        "<p>Please countersign via the Financial Report Review Agent at your earliest convenience.</p>"
+    )
+
+    def _send() -> None:
+        _send_mailgun_email(subject, body_text, body_html)
+        _send_slack_message(
+            f":pen: *Second signature required* — _{report_title}_\n"
+            f">First signature: *{first_signer}*\n"
+            f">Awaiting: *{awaiting_role}* by *{sla_due}* (3 business days)\n"
+            f">Recorded at {timestamp}"
+        )
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
+def _send_mailgun_email(subject: str, body_text: str, body_html: str) -> None:
+    api_key = os.environ.get("MAILGUN_API_KEY", "")
+    domain  = os.environ.get("MAILGUN_DOMAIN", "")
+    to_raw  = os.environ.get("NOTIFICATION_EMAIL_TO", "")
+    if not (api_key and domain and to_raw):
+        return
+
+    recipients = [r.strip() for r in to_raw.split(",") if r.strip()]
+    payload = urllib.parse.urlencode({
+        "from":    f"Financial Reports <mailgun@{domain}>",
+        "to":      ",".join(recipients),
+        "subject": subject,
+        "text":    body_text,
+        "html":    body_html,
+    }).encode()
+
+    req = urllib.request.Request(
+        f"https://api.mailgun.net/v3/{domain}/messages",
+        data=payload,
+        method="POST",
+    )
+    # Basic auth: api:API_KEY
+    import base64
+    cred = base64.b64encode(f"api:{api_key}".encode()).decode()
+    req.add_header("Authorization", f"Basic {cred}")
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            log.info("Mailgun notification sent: %s", resp.status)
+    except Exception as exc:
+        log.warning("Mailgun notification failed: %s", exc)
+
+
+def _send_slack_message(text: str) -> None:
+    webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
+    if not webhook:
+        return
+    payload = json.dumps({"text": text}).encode()
+    req = urllib.request.Request(webhook, data=payload, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            log.info("Slack notification sent: %s", resp.status)
+    except Exception as exc:
+        log.warning("Slack notification failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Mailgun inbound signature verification
+# ---------------------------------------------------------------------------
 def _verify_mailgun_signature(token: str, timestamp: str, signature: str) -> bool:
     """Return True if the request is genuinely from Mailgun."""
     signing_key = os.environ.get("MAILGUN_SIGNING_KEY", "")
@@ -725,17 +836,21 @@ def record_approval_decision():
             )
 
         if pending is None:
-            store.add_pending_signature(report_title, decided_by, role, timestamp, notes)
+            sla_due = store.compute_sla_due(timestamp)
+            store.add_pending_signature(report_title, decided_by, role, timestamp, notes, sla_due=sla_due)
             store.log_decision(report_title, "First Signature", decided_by, timestamp, notes)
             awaiting = next(r for r in _DUAL_SIG_ROLES if r != role)
+            _notify_second_signer(report_title, decided_by, awaiting, sla_due, timestamp)
             return _record(
                 report_title, "Pending Second Signature", decided_by, timestamp, notes,
                 [f"First signature recorded from **{decided_by}** at {timestamp}.",
                  f"Awaiting countersignature from **{awaiting}** to complete dual-signature approval.",
                  "Budget release is on hold until both signatures are captured.",
-                 f"Notify {awaiting} to review and countersign at their earliest convenience."],
+                 f"Notify {awaiting} to review and countersign at their earliest convenience.",
+                 f"⏱️ Revision due by **{sla_due}** (3 business days). An email and Slack notification has been dispatched to {awaiting}."],
                 f"🖊️ FIRST SIGNATURE RECORDED — '{report_title}' has been signed by **{decided_by}** "
-                f"on {timestamp}. Awaiting countersignature from **{awaiting}** before clearance can be issued.",
+                f"on {timestamp}. Awaiting countersignature from **{awaiting}** before clearance can be issued. "
+                f"SLA due: **{sla_due}**.",
                 pending=awaiting,
             )
 
@@ -795,6 +910,22 @@ def record_approval_decision():
         complete=(decision == "Approved"),
     )
 
+
+
+@app.route("/api/sla_status", methods=["GET"])
+def sla_status():
+    """Return SLA countdown(s) for reports currently in 'Pending Second Signature'.
+
+    Optional query param: ?title=<report_title> — returns a single record.
+    Without ?title, returns all pending SLA records.
+    """
+    title = (request.args.get("title") or "").strip()
+    if title:
+        result = store.get_sla_status(title)
+        if result is None:
+            return jsonify({"error": f"No pending second signature found for '{title}'"}), 404
+        return jsonify(result)
+    return jsonify(store.list_sla_statuses())
 
 
 # ---------------------------------------------------------------------------

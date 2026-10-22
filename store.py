@@ -41,6 +41,9 @@ SEED_REPORTS = [
 
 REPORT_FIELDS = ("report_id", "title", "date", "status", "summary", "recommendation")
 
+# Business days allowed for the second signature before the SLA is breached.
+SLA_BUSINESS_DAYS = 3
+
 
 @contextmanager
 def _db():
@@ -69,10 +72,10 @@ def init_db() -> None:
                    first_signer TEXT NOT NULL,
                    first_role TEXT NOT NULL,
                    first_timestamp TEXT NOT NULL,
-                   notes TEXT)"""
+                   notes TEXT,
+                   sla_due TEXT)"""
         )
         c.execute(
-<<<<<<< Updated upstream
             """CREATE TABLE IF NOT EXISTS completed_dual_sig (
                    report_key TEXT PRIMARY KEY,
                    report_title TEXT NOT NULL,
@@ -91,7 +94,7 @@ def init_db() -> None:
                    timestamp TEXT NOT NULL)"""
         )
         c.execute("CREATE INDEX IF NOT EXISTS decisions_by_key ON decisions(report_key, id)")
-=======
+        c.execute(
             """CREATE TABLE IF NOT EXISTS email_reports (
                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
                    sender      TEXT NOT NULL,
@@ -103,7 +106,11 @@ def init_db() -> None:
                    warnings    TEXT NOT NULL DEFAULT '[]',
                    attachment_name TEXT NOT NULL DEFAULT '')"""
         )
->>>>>>> Stashed changes
+        # Add sla_due column to pending_dual_sig if it was created before this migration.
+        try:
+            c.execute("ALTER TABLE pending_dual_sig ADD COLUMN sla_due TEXT")
+        except Exception:
+            pass  # column already exists — safe to ignore
         c.executemany(
             "INSERT OR IGNORE INTO reports VALUES (:report_id, :title, :date, :status, :summary, :recommendation)",
             SEED_REPORTS,
@@ -140,12 +147,9 @@ def reset() -> None:
     with _db() as c:
         c.execute("DELETE FROM reports")
         c.execute("DELETE FROM pending_dual_sig")
-<<<<<<< Updated upstream
         c.execute("DELETE FROM completed_dual_sig")
         c.execute("DELETE FROM decisions")
-=======
         c.execute("DELETE FROM email_reports")
->>>>>>> Stashed changes
     init_db()
 
 
@@ -226,20 +230,26 @@ def list_pending_signatures() -> list[dict]:
         return [dict(r) for r in c.execute("SELECT * FROM pending_dual_sig ORDER BY first_timestamp")]
 
 
-def add_pending_signature(report_title: str, signer: str, role: str, timestamp: str, notes: str | None) -> None:
+def add_pending_signature(
+    report_title: str,
+    signer: str,
+    role: str,
+    timestamp: str,
+    notes: str | None,
+    sla_due: str | None = None,
+) -> None:
     """Start a dual-signature cycle (also clears any earlier completed cycle for this title)."""
     with _db() as c:
         c.execute("DELETE FROM completed_dual_sig WHERE report_key = ?", (_key(report_title),))
         c.execute(
-            "INSERT OR REPLACE INTO pending_dual_sig VALUES (?, ?, ?, ?, ?, ?)",
-            (_key(report_title), report_title, signer, role, timestamp, notes),
+            "INSERT OR REPLACE INTO pending_dual_sig VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (_key(report_title), report_title, signer, role, timestamp, notes, sla_due),
         )
 
 
 def clear_pending_signature(report_title: str) -> None:
     with _db() as c:
         c.execute("DELETE FROM pending_dual_sig WHERE report_key = ?", (_key(report_title),))
-
 
 
 def complete_dual_signature(report_title: str, signers: str, timestamp: str) -> None:
@@ -256,6 +266,94 @@ def list_completed_signatures() -> list[dict]:
     with _db() as c:
         return [dict(r) for r in c.execute("SELECT * FROM completed_dual_sig ORDER BY completed_timestamp")]
 
+
+# ------------------------------------------------------------ SLA helpers
+import datetime as _dt
+
+
+def _add_business_days(start_iso: str, days: int) -> str:
+    """Return an ISO-8601 date string `days` business days after `start_iso`."""
+    try:
+        d = _dt.date.fromisoformat(start_iso[:10])
+    except ValueError:
+        d = _dt.date.today()
+    added = 0
+    while added < days:
+        d += _dt.timedelta(days=1)
+        if d.weekday() < 5:   # Monday–Friday
+            added += 1
+    return d.isoformat()
+
+
+def compute_sla_due(first_timestamp: str) -> str:
+    """Compute the SLA due date (SLA_BUSINESS_DAYS business days from first signature)."""
+    return _add_business_days(first_timestamp, SLA_BUSINESS_DAYS)
+
+
+def get_sla_status(report_title: str) -> dict | None:
+    """Return SLA countdown info for a report currently pending second signature.
+
+    Returns a dict with keys:
+      report_title, first_signer, first_role, first_timestamp,
+      pending_cosignatory, sla_due, business_days_remaining,
+      calendar_days_remaining, is_breached, status_label
+    or None if no pending signature exists for this title.
+    """
+    pending = get_pending_signature(report_title)
+    if pending is None:
+        return None
+
+    sla_due_str = pending.get("sla_due") or compute_sla_due(pending["first_timestamp"])
+    try:
+        sla_due_date = _dt.date.fromisoformat(sla_due_str)
+    except ValueError:
+        sla_due_date = _dt.date.today()
+
+    today = _dt.date.today()
+    calendar_days_remaining = (sla_due_date - today).days
+
+    # Count remaining business days
+    biz_remaining = 0
+    d = today
+    while d < sla_due_date:
+        d += _dt.timedelta(days=1)
+        if d.weekday() < 5:
+            biz_remaining += 1
+
+    is_breached = today > sla_due_date
+    if is_breached:
+        status_label = "🔴 SLA BREACHED"
+    elif biz_remaining == 0:
+        status_label = "🟠 Due Today"
+    elif biz_remaining == 1:
+        status_label = "🟠 Due Tomorrow"
+    else:
+        status_label = f"🟢 {biz_remaining} business days remaining"
+
+    from typing import Optional as _Opt
+    _DUAL_SIG_ROLES = ("CFO", "VP Finance")
+    pending_cosignatory = next(
+        (r for r in _DUAL_SIG_ROLES if r != pending["first_role"]),
+        "Second Signatory"
+    )
+
+    return {
+        "report_title": pending["report_title"],
+        "first_signer": pending["first_signer"],
+        "first_role": pending["first_role"],
+        "first_timestamp": pending["first_timestamp"],
+        "pending_cosignatory": pending_cosignatory,
+        "sla_due": sla_due_str,
+        "business_days_remaining": biz_remaining,
+        "calendar_days_remaining": calendar_days_remaining,
+        "is_breached": is_breached,
+        "status_label": status_label,
+    }
+
+
+def list_sla_statuses() -> list[dict]:
+    """Return SLA status for every pending-second-signature record."""
+    return [s for s in (get_sla_status(r["report_title"]) for r in list_pending_signatures()) if s]
 
 
 # ------------------------------------------------------------ decision log
