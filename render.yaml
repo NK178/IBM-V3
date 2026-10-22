@@ -8,6 +8,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: FLASK_ENV
+        value: production
       # Embedded agent chat (dashboard "Ask Agent" drawer). Values are set in the Render dashboard.
       - key: WXO_PRIVATE_KEY
         sync: false
@@ -23,8 +25,18 @@ services:
         sync: false
       - key: WXO_AGENT_ENV_ID
         sync: false
+      # Mailgun inbound webhook signing key (verifies inbound email authenticity)
       - key: MAILGUN_SIGNING_KEY
-        sync: false   # Set this in the Render dashboard — do NOT commit the real value
-      - key: FLASK_ENV
-        value: production
+        sync: false
+      # ── Outbound notifications (Pending Second Signature) ─────────────────
+      # Email via Mailgun — set all three to enable email notifications.
+      - key: MAILGUN_API_KEY
+        sync: false
+      - key: MAILGUN_DOMAIN
+        sync: false
+      - key: NOTIFICATION_EMAIL_TO
+        sync: false   # comma-separated; e.g. cfo@example.com,vp-finance@example.com
+      # Slack Incoming Webhook — set to enable Slack notifications.
+      - key: SLACK_WEBHOOK_URL
+        sync: false
     healthCheckPath: /healthz
