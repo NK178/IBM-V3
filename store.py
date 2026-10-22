@@ -72,6 +72,7 @@ def init_db() -> None:
                    notes TEXT)"""
         )
         c.execute(
+<<<<<<< Updated upstream
             """CREATE TABLE IF NOT EXISTS completed_dual_sig (
                    report_key TEXT PRIMARY KEY,
                    report_title TEXT NOT NULL,
@@ -90,6 +91,19 @@ def init_db() -> None:
                    timestamp TEXT NOT NULL)"""
         )
         c.execute("CREATE INDEX IF NOT EXISTS decisions_by_key ON decisions(report_key, id)")
+=======
+            """CREATE TABLE IF NOT EXISTS email_reports (
+                   id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                   sender      TEXT NOT NULL,
+                   subject     TEXT NOT NULL,
+                   received_at TEXT NOT NULL,
+                   body_text   TEXT NOT NULL DEFAULT '',
+                   status      TEXT NOT NULL DEFAULT 'Unread',
+                   line_items  TEXT NOT NULL DEFAULT '[]',
+                   warnings    TEXT NOT NULL DEFAULT '[]',
+                   attachment_name TEXT NOT NULL DEFAULT '')"""
+        )
+>>>>>>> Stashed changes
         c.executemany(
             "INSERT OR IGNORE INTO reports VALUES (:report_id, :title, :date, :status, :summary, :recommendation)",
             SEED_REPORTS,
@@ -126,9 +140,74 @@ def reset() -> None:
     with _db() as c:
         c.execute("DELETE FROM reports")
         c.execute("DELETE FROM pending_dual_sig")
+<<<<<<< Updated upstream
         c.execute("DELETE FROM completed_dual_sig")
         c.execute("DELETE FROM decisions")
+=======
+        c.execute("DELETE FROM email_reports")
+>>>>>>> Stashed changes
     init_db()
+
+
+# ------------------------------------------------------- email reports
+import json as _json
+
+
+def add_email_report(
+    sender: str,
+    subject: str,
+    received_at: str,
+    body_text: str,
+    line_items: list,
+    warnings: list,
+    attachment_name: str,
+) -> int:
+    """Insert a parsed inbound email report. Returns the new row id."""
+    with _db() as c:
+        cur = c.execute(
+            """INSERT INTO email_reports
+               (sender, subject, received_at, body_text, status, line_items, warnings, attachment_name)
+               VALUES (?, ?, ?, ?, 'Unread', ?, ?, ?)""",
+            (
+                sender, subject, received_at, body_text,
+                _json.dumps(line_items), _json.dumps(warnings), attachment_name,
+            ),
+        )
+        return cur.lastrowid
+
+
+def list_email_reports() -> list[dict]:
+    with _db() as c:
+        rows = c.execute("SELECT * FROM email_reports ORDER BY received_at DESC").fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["line_items"] = _json.loads(d["line_items"])
+        d["warnings"]   = _json.loads(d["warnings"])
+        result.append(d)
+    return result
+
+
+def get_email_report(email_id: int) -> dict | None:
+    with _db() as c:
+        row = c.execute("SELECT * FROM email_reports WHERE id = ?", (email_id,)).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    d["line_items"] = _json.loads(d["line_items"])
+    d["warnings"]   = _json.loads(d["warnings"])
+    return d
+
+
+def mark_email_read(email_id: int) -> None:
+    with _db() as c:
+        c.execute("UPDATE email_reports SET status = 'Read' WHERE id = ?", (email_id,))
+
+
+def delete_email_report(email_id: int) -> bool:
+    with _db() as c:
+        cur = c.execute("DELETE FROM email_reports WHERE id = ?", (email_id,))
+    return cur.rowcount > 0
 
 
 # ------------------------------------------------------- dual signatures

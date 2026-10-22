@@ -33,6 +33,10 @@
       <button class="nav-item" data-view="audit">
         <span class="nav-icon">&#128221;</span> Audit Trail
       </button>
+      <button class="nav-item" data-view="inbox">
+        <span class="nav-icon">&#128140;</span> Email Inbox
+        <span class="inbox-unread-badge hidden" id="inbox-unread-badge">0</span>
+      </button>
     </nav>
     <!-- ── Approval Routing Card ── -->
     <div class="approval-card" id="approval-card">
@@ -342,6 +346,38 @@
         <div id="audit-output" class="output-area audit-output-area">
           <p class="placeholder">Select a report and click View Trail — or choose All to see every event.</p>
         </div>
+      </div>
+    </section>
+
+    <!-- ── EMAIL INBOX VIEW ── -->
+    <section id="view-inbox" class="view">
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Email Inbox</h3>
+          <div class="controls-row">
+            <span class="inbox-hint">Emails sent to your Mailgun address appear here automatically.</span>
+            <button class="btn-primary" style="margin-left:auto;" onclick="loadEmailInbox()">&#8635; Refresh</button>
+          </div>
+        </div>
+
+        <!-- Setup callout — shown only when no emails yet -->
+        <div class="inbox-setup" id="inbox-setup">
+          <div class="inbox-setup-icon">&#128140;</div>
+          <div class="inbox-setup-title">No emails yet</div>
+          <div class="inbox-setup-body">
+            Configure Mailgun inbound routing to <strong>POST</strong> to:<br/>
+            <code id="inbox-webhook-url"></code>
+            <br/><br/>
+            Employees email <strong>reports@yourdomain.com</strong> with a CSV or XLSX attachment (or a pasted CSV table in the body).
+            The app parses the report automatically and it appears here.
+          </div>
+        </div>
+
+        <!-- Email tray -->
+        <div id="inbox-tray" class="inbox-tray hidden"></div>
+
+        <!-- Detail pane — shown when an email is opened -->
+        <div id="inbox-detail" class="inbox-detail hidden"></div>
       </div>
     </section>
 

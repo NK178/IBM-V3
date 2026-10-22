@@ -1,8 +1,11 @@
 from flask import Flask, request, jsonify, render_template
 from datetime import datetime, timezone
 import csv
+import hashlib
+import hmac
 import io
 import json
+import os
 
 import store
 from chat_auth import bp as chat_bp
@@ -335,6 +338,135 @@ def _parse_xlsx_bytes(data: bytes) -> tuple[list[dict], list[str]]:
         rows.append(row)
 
     return _rows_to_line_items(rows)
+
+
+# ---------------------------------------------------------------------------
+# Email ingest (Mailgun inbound routing webhook)
+# ---------------------------------------------------------------------------
+
+def _verify_mailgun_signature(token: str, timestamp: str, signature: str) -> bool:
+    """Return True if the request is genuinely from Mailgun."""
+    signing_key = os.environ.get("MAILGUN_SIGNING_KEY", "")
+    if not signing_key:
+        # Key not configured — allow in dev, reject in prod by checking env
+        return os.environ.get("FLASK_ENV", "production") != "production"
+    value = timestamp + token
+    digest = hmac.new(signing_key.encode(), value.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(digest, signature)
+
+
+def _extract_line_items_from_body(body: str) -> tuple[list[dict], list[str]]:
+    """
+    Best-effort extraction of a CSV table embedded in an email body.
+    Employees can paste a CSV block anywhere in the message body.
+    Lines that don't parse as CSV data are ignored.
+    """
+    # Try to find a contiguous block that looks like CSV (has commas, at least 2 cols)
+    candidate_lines = [l for l in body.splitlines() if l.count(",") >= 1]
+    if len(candidate_lines) < 2:
+        return [], ["No CSV table found in email body."]
+    csv_text = "\n".join(candidate_lines)
+    return _parse_csv_bytes(csv_text.encode("utf-8"))
+
+
+@app.route("/api/email_ingest", methods=["POST"])
+def email_ingest():
+    """Mailgun inbound routing webhook.
+
+    Mailgun POSTs a multipart/form-data with the following fields:
+      sender, from, subject, body-plain, body-html,
+      timestamp, token, signature,
+      attachment-count, attachment-1 … attachment-N
+    """
+    # ── Signature verification ──────────────────────────────────────────────
+    token     = request.form.get("token", "")
+    timestamp = request.form.get("timestamp", "")
+    signature = request.form.get("signature", "")
+
+    if not _verify_mailgun_signature(token, timestamp, signature):
+        return jsonify({"error": "Invalid signature"}), 403
+
+    # ── Extract metadata ─────────────────────────────────────────────────────
+    sender   = request.form.get("sender") or request.form.get("from", "unknown@unknown.com")
+    subject  = request.form.get("subject", "(no subject)").strip()
+    body     = request.form.get("body-plain") or request.form.get("body-html", "")
+    received_at = _now()
+
+    line_items: list[dict] = []
+    warnings:   list[str]  = []
+    attachment_name = ""
+
+    # ── Try attachments first (CSV or XLSX take priority over body text) ─────
+    att_count = int(request.form.get("attachment-count", 0))
+    for i in range(1, att_count + 1):
+        f = request.files.get(f"attachment-{i}")
+        if f is None:
+            continue
+        fname = (f.filename or "").lower()
+        if fname.endswith(".csv"):
+            data = f.read()
+            line_items, warnings = _parse_csv_bytes(data)
+            attachment_name = f.filename
+            break
+        elif fname.endswith(".xlsx"):
+            data = f.read()
+            line_items, warnings = _parse_xlsx_bytes(data)
+            attachment_name = f.filename
+            break
+
+    # ── Fall back to body-embedded CSV if no usable attachment ───────────────
+    if not line_items and body.strip():
+        line_items, warnings = _extract_line_items_from_body(body)
+
+    # ── Persist regardless of whether we extracted line items ────────────────
+    email_id = store.add_email_report(
+        sender=sender,
+        subject=subject,
+        received_at=received_at,
+        body_text=body[:4000],      # cap stored body at 4 KB
+        line_items=line_items,
+        warnings=warnings,
+        attachment_name=attachment_name,
+    )
+
+    return jsonify({
+        "ok": True,
+        "email_id": email_id,
+        "sender": sender,
+        "subject": subject,
+        "line_items_parsed": len(line_items),
+        "attachment": attachment_name or None,
+        "warnings": warnings,
+    })
+
+
+@app.route("/api/list_email_reports", methods=["GET"])
+def list_email_reports():
+    return jsonify(store.list_email_reports())
+
+
+@app.route("/api/get_email_report", methods=["GET"])
+def get_email_report_route():
+    try:
+        email_id = int(request.args.get("id", 0))
+    except ValueError:
+        return jsonify({"error": "Invalid id"}), 400
+    report = store.get_email_report(email_id)
+    if report is None:
+        return jsonify({"error": f"Email report {email_id} not found"}), 404
+    store.mark_email_read(email_id)
+    return jsonify(report)
+
+
+@app.route("/api/delete_email_report", methods=["POST"])
+def delete_email_report_route():
+    data = request.get_json(silent=True) or {}
+    try:
+        email_id = int(data.get("id", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid id"}), 400
+    deleted = store.delete_email_report(email_id)
+    return jsonify({"ok": deleted})
 
 
 @app.route("/api/parse_upload", methods=["POST"])

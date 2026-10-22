@@ -7,6 +7,7 @@ const VIEW_TITLES = {
   compare:   'Compare Reports',
   approve:   'Approve / Reject',
   audit:     'Audit Trail',
+  inbox:     'Email Inbox',
 };
 
 function switchView(id) {
@@ -19,6 +20,8 @@ function switchView(id) {
   document.getElementById('view-title').textContent = VIEW_TITLES[id] || id;
   // Auto-refresh the audit trail when navigating to it
   if (id === 'audit') showAuditTrail();
+  // Auto-refresh the inbox when navigating to it
+  if (id === 'inbox') loadEmailInbox();
 }
 
 document.querySelectorAll('.nav-item[data-view]').forEach(btn => {
@@ -1098,3 +1101,296 @@ generateFinancialReport = async function () {
 
 // Initialise card in idle state on page load
 resetApprovalCard();
+
+/* ── Email Inbox ── */
+
+/** Show the webhook URL in the setup pane */
+(function () {
+  const el = document.getElementById('inbox-webhook-url');
+  if (el) el.textContent = window.location.origin + '/api/email_ingest';
+})();
+
+/**
+ * Load all inbound email reports from the server.
+ * Called on page load (boot poll) and on every inbox navigation.
+ */
+async function loadEmailInbox() {
+  const tray    = document.getElementById('inbox-tray');
+  const setup   = document.getElementById('inbox-setup');
+  const detail  = document.getElementById('inbox-detail');
+
+  tray.innerHTML = '<div class="loading"><span class="spinner"></span>Loading inbox…</div>';
+  tray.classList.remove('hidden');
+  setup.style.display = 'none';
+  if (detail) detail.classList.add('hidden');
+
+  try {
+    const res   = await fetch('/api/list_email_reports');
+    const emails = await res.json();
+
+    _updateInboxBadge(emails);
+
+    if (!emails.length) {
+      tray.classList.add('hidden');
+      setup.style.display = '';
+      return;
+    }
+
+    setup.style.display = 'none';
+    tray.innerHTML = emails.map(e => _renderInboxCard(e)).join('');
+  } catch (err) {
+    tray.innerHTML = `<p class="placeholder">Could not load inbox: ${escHtml(err.message)}</p>`;
+  }
+}
+
+/** Render a single email tray card */
+function _renderInboxCard(e) {
+  const initial  = (e.sender || '?').trim()[0].toUpperCase();
+  const hasData  = e.line_items && e.line_items.length > 0;
+  const isUnread = e.status === 'Unread';
+  const cardCls  = [
+    'inbox-card',
+    isUnread  ? 'unread'   : '',
+    hasData   ? 'has-data' : '',
+  ].filter(Boolean).join(' ');
+
+  const statusChip = isUnread
+    ? `<span class="inbox-chip inbox-chip-unread">Unread</span>`
+    : `<span class="inbox-chip inbox-chip-read">Read</span>`;
+
+  const dataChip = hasData
+    ? `<span class="inbox-chip inbox-chip-data">${e.line_items.length} rows</span>`
+    : `<span class="inbox-chip inbox-chip-nodata">No data</span>`;
+
+  const attBadge = e.attachment_name
+    ? `<span style="font-size:11px;">📎 ${escHtml(e.attachment_name)}</span>` : '';
+
+  const time = _fmtInboxTime(e.received_at);
+
+  return `
+    <div class="${cardCls}" onclick="openEmailReport(${e.id})">
+      <div class="inbox-card-left">
+        <div class="inbox-avatar">${escHtml(initial)}</div>
+      </div>
+      <div class="inbox-card-body">
+        <div class="inbox-card-subject">${escHtml(e.subject)}</div>
+        <div class="inbox-card-meta">
+          <span>${escHtml(e.sender)}</span>
+          ${statusChip}
+          ${dataChip}
+          ${attBadge}
+          <span class="inbox-card-time">${escHtml(time)}</span>
+        </div>
+      </div>
+    </div>`;
+}
+
+/** Open an email report: fetch full detail, mark read, optionally analyze */
+async function openEmailReport(emailId) {
+  const detail = document.getElementById('inbox-detail');
+  detail.classList.remove('hidden');
+  detail.innerHTML = '<div class="loading"><span class="spinner"></span>Opening…</div>';
+
+  // Scroll detail into view
+  detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const res = await fetch(`/api/get_email_report?id=${emailId}`);
+    if (!res.ok) throw new Error('Could not load email.');
+    const e = await res.json();
+
+    const hasData = e.line_items && e.line_items.length > 0;
+
+    // Re-render tray card as Read
+    await loadEmailInbox();
+
+    // Audit
+    auditRecord('financial', 'viewed', { detail: `Email opened: ${e.subject} from ${e.sender}` });
+
+    // Render preview rows if we have data
+    const previewHtml = hasData ? (() => {
+      const rows = e.line_items.map(li => {
+        const chip = li.status === 'Over Budget'  ? 'chip-over'
+                   : li.status === 'Under Budget' ? 'chip-under' : 'chip-ok';
+        return `<tr>
+          <td>${escHtml(li.category)}</td>
+          <td>${fmtUSD(li.budgeted_usd)}</td>
+          <td>${fmtUSD(li.actual_usd)}</td>
+          <td>${fmtUSD(li.variance_usd)}</td>
+          <td>${fmtPct(li.variance_pct)}</td>
+          <td><span class="chip ${chip}">${escHtml(li.status)}</span></td>
+        </tr>`;
+      }).join('');
+      return `
+        <div class="upload-preview-title">${e.line_items.length} line items parsed from email</div>
+        <div style="overflow-x:auto;margin-bottom:1rem;">
+          <table>
+            <thead><tr>
+              <th>Category</th><th>Budgeted</th><th>Actual</th>
+              <th>Variance $</th><th>Variance %</th><th>Status</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    })() : `<p class="inbox-no-data-note">No structured data could be parsed from this email.
+      The employee may not have included a CSV attachment or pasted a CSV table in the body.</p>`;
+
+    const warningsHtml = (e.warnings && e.warnings.length)
+      ? `<div class="upload-warnings" style="margin-bottom:1rem;">
+           ⚠ ${e.warnings.map(escHtml).join('<br>⚠ ')}
+         </div>` : '';
+
+    const analyzeBtn = hasData
+      ? `<button class="btn-primary" onclick="analyzeEmailReport(${emailId})">
+           &#128200; Analyze Report
+         </button>` : '';
+
+    detail.innerHTML = `
+      <div class="inbox-detail-header">
+        <div style="flex:1;">
+          <div class="inbox-detail-subject">${escHtml(e.subject)}</div>
+          <div class="inbox-detail-sender">From: ${escHtml(e.sender)} &nbsp;·&nbsp; ${escHtml(_fmtInboxTime(e.received_at))}</div>
+        </div>
+        <button class="btn-danger" style="padding:0.4rem 0.75rem;flex-shrink:0;"
+                onclick="deleteEmailReport(${emailId})">&#128465; Delete</button>
+      </div>
+      ${e.body_text ? `<div class="inbox-detail-body">${escHtml(e.body_text)}</div>` : ''}
+      ${warningsHtml}
+      ${previewHtml}
+      <div class="inbox-detail-actions">
+        ${analyzeBtn}
+        <button class="btn-danger" onclick="deleteEmailReport(${emailId})" style="margin-left:auto;">
+          &#128465; Delete
+        </button>
+      </div>`;
+  } catch (err) {
+    detail.innerHTML = `<p class="placeholder">Error: ${escHtml(err.message)}</p>`;
+  }
+}
+
+/** Run analyze_financial_report on a stored email report's line items */
+async function analyzeEmailReport(emailId) {
+  const out = document.getElementById('financial-output');
+
+  // Navigate to financial view so the result is visible
+  switchView('financial');
+  setLoading(out);
+
+  try {
+    const res = await fetch(`/api/get_email_report?id=${emailId}`);
+    const e   = await res.json();
+
+    if (!e.line_items || !e.line_items.length) {
+      out.innerHTML = '<p class="placeholder">No line items to analyze in this email.</p>';
+      return;
+    }
+
+    const title = e.subject || 'Email Report';
+    const totalBudgeted = e.line_items.reduce((s, r) => s + r.budgeted_usd, 0);
+    const totalActual   = e.line_items.reduce((s, r) => s + r.actual_usd,   0);
+    const totalVariance = Math.round((totalActual - totalBudgeted) * 100) / 100;
+    const totalPct      = totalBudgeted
+      ? Math.round((totalVariance / totalBudgeted) * 10000) / 100 : 0;
+
+    const analyzeRes = await fetch('/api/analyze_financial_report', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        report_title:       title,
+        total_budgeted_usd: totalBudgeted,
+        total_actual_usd:   totalActual,
+        line_items:         e.line_items,
+      }),
+    });
+    const analysis = await analyzeRes.json();
+
+    const report = {
+      report_title:       title,
+      department:         e.sender,
+      report_period:      'Email',
+      total_budgeted_usd: totalBudgeted,
+      total_actual_usd:   totalActual,
+      total_variance_usd: totalVariance,
+      total_variance_pct: totalPct,
+      line_items:         e.line_items,
+    };
+
+    out.innerHTML = renderFinancialReport(report, analysis);
+
+    auditRecord('financial', 'generated', {
+      detail: `${title} (email from ${e.sender}) | ${e.line_items.length} rows | ${analysis.overall_status}`,
+    });
+
+    // Update approval routing card
+    const tier = analysis.overall_status === 'Critical Overrun'  ? 'dual'
+               : analysis.overall_status === 'Requires Scrutiny' ? 'standard'
+               : 'auto';
+    renderApprovalCard(tier, { id: null, title, status: 'Pending Review' });
+    if (tier !== 'auto') {
+      auditRecord('financial', 'routed', {
+        detail: `Routed as ${APPROVAL_TIERS[tier].label} — ${title}`,
+      });
+    }
+
+    showToast(`Analyzed "${title}" — ${e.line_items.length} line items.`);
+  } catch (err) {
+    out.innerHTML = `<p class="placeholder">Error: ${escHtml(err.message)}</p>`;
+  }
+}
+
+/** Delete an email report */
+async function deleteEmailReport(emailId) {
+  try {
+    await fetch('/api/delete_email_report', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ id: emailId }),
+    });
+    document.getElementById('inbox-detail').classList.add('hidden');
+    await loadEmailInbox();
+    showToast('Email deleted.');
+  } catch (err) {
+    showToast('Could not delete email.', 'error');
+  }
+}
+
+/** Update the red unread badge on the nav item */
+function _updateInboxBadge(emails) {
+  const badge  = document.getElementById('inbox-unread-badge');
+  if (!badge) return;
+  const unread = emails.filter(e => e.status === 'Unread').length;
+  if (unread > 0) {
+    badge.textContent = unread > 99 ? '99+' : String(unread);
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+}
+
+/** Format an ISO timestamp as a friendly relative or absolute string */
+function _fmtInboxTime(iso) {
+  if (!iso) return '';
+  const d   = new Date(iso);
+  const now = new Date();
+  const diffMs  = now - d;
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1)  return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH  < 24)  return `${diffH}h ago`;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+// ── Boot poll: check inbox on page load and every 60 seconds ──
+loadEmailInbox();
+setInterval(async () => {
+  try {
+    const res    = await fetch('/api/list_email_reports');
+    const emails = await res.json();
+    _updateInboxBadge(emails);
+    // If already on the inbox view, refresh the tray silently
+    if (document.getElementById('view-inbox')?.classList.contains('active')) {
+      loadEmailInbox();
+    }
+  } catch { /* silent — badge just won't update */ }
+}, 60_000);

@@ -675,6 +675,197 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
   margin-bottom: 0.5rem;
 }
 
+/* ── Email Inbox ── */
+
+/* unread badge on the nav item */
+.inbox-unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  margin-left: auto;
+  line-height: 1;
+}
+
+.inbox-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* setup placeholder */
+.inbox-setup {
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--muted);
+}
+
+.inbox-setup-icon { font-size: 36px; margin-bottom: 0.6rem; opacity: 0.5; }
+.inbox-setup-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 0.5rem; }
+.inbox-setup-body  { font-size: 13px; line-height: 1.7; }
+.inbox-setup-body code {
+  display: inline-block;
+  margin-top: 0.4rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--accent);
+  word-break: break-all;
+}
+
+/* tray list */
+.inbox-tray {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
+}
+
+.inbox-tray.hidden { display: none; }
+
+.inbox-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.inbox-card:hover { border-color: var(--accent); background: rgba(79,142,247,0.04); }
+
+.inbox-card.unread { border-left: 3px solid var(--accent); }
+.inbox-card.has-data { border-left: 3px solid var(--success); }
+
+.inbox-card-left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  width: 42px;
+}
+
+.inbox-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(79,142,247,0.15);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: uppercase;
+}
+
+.inbox-card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.inbox-card-subject {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inbox-card.unread .inbox-card-subject { color: #fff; }
+
+.inbox-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.inbox-card-time { margin-left: auto; white-space: nowrap; }
+
+.inbox-chip {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.inbox-chip-data    { background: rgba(34,197,94,0.12);  color: var(--success); }
+.inbox-chip-nodata  { background: rgba(139,143,168,0.1); color: var(--muted); }
+.inbox-chip-unread  { background: rgba(79,142,247,0.12); color: var(--accent); }
+.inbox-chip-read    { background: rgba(139,143,168,0.1); color: var(--muted); }
+
+/* detail pane */
+.inbox-detail { margin-top: 1.25rem; }
+.inbox-detail.hidden { display: none; }
+
+.inbox-detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.inbox-detail-subject {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  flex: 1;
+}
+
+.inbox-detail-sender {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.inbox-detail-body {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 1rem;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+}
+
+.inbox-detail-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.inbox-no-data-note {
+  font-size: 13px;
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* ── Audit Trail Timeline ── */
 .audit-output-area {
   min-height: 120px;
