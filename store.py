@@ -7,6 +7,7 @@ Backed by SQLite so state is shared across gunicorn workers. On Render's free
 plan the disk is ephemeral: data resets to SEED_REPORTS on redeploy/restart.
 """
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 
@@ -39,7 +40,8 @@ SEED_REPORTS = [
     },
 ]
 
-REPORT_FIELDS = ("report_id", "title", "date", "status", "summary", "recommendation")
+REPORT_FIELDS = ("report_id", "title", "date", "status", "summary", "recommendation",
+                 "version", "parent_id", "root_id", "change_note")
 
 
 @contextmanager
@@ -62,6 +64,13 @@ def init_db() -> None:
                    title TEXT NOT NULL, date TEXT NOT NULL, status TEXT NOT NULL,
                    summary TEXT NOT NULL, recommendation TEXT NOT NULL)"""
         )
+        # Versioning (revision loop). Added with ALTER so existing databases upgrade in place.
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(reports)")}
+        for col, ddl in (("version", "INTEGER NOT NULL DEFAULT 1"), ("parent_id", "INTEGER"),
+                         ("root_id", "INTEGER"), ("change_note", "TEXT")):
+            if col not in cols:
+                c.execute(f"ALTER TABLE reports ADD COLUMN {col} {ddl}")
+        c.execute("UPDATE reports SET root_id = report_id WHERE root_id IS NULL")
         c.execute(
             """CREATE TABLE IF NOT EXISTS pending_dual_sig (
                    report_key TEXT PRIMARY KEY,
@@ -72,7 +81,6 @@ def init_db() -> None:
                    notes TEXT)"""
         )
         c.execute(
-<<<<<<< Updated upstream
             """CREATE TABLE IF NOT EXISTS completed_dual_sig (
                    report_key TEXT PRIMARY KEY,
                    report_title TEXT NOT NULL,
@@ -91,7 +99,7 @@ def init_db() -> None:
                    timestamp TEXT NOT NULL)"""
         )
         c.execute("CREATE INDEX IF NOT EXISTS decisions_by_key ON decisions(report_key, id)")
-=======
+        c.execute(
             """CREATE TABLE IF NOT EXISTS email_reports (
                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
                    sender      TEXT NOT NULL,
@@ -103,9 +111,9 @@ def init_db() -> None:
                    warnings    TEXT NOT NULL DEFAULT '[]',
                    attachment_name TEXT NOT NULL DEFAULT '')"""
         )
->>>>>>> Stashed changes
         c.executemany(
-            "INSERT OR IGNORE INTO reports VALUES (:report_id, :title, :date, :status, :summary, :recommendation)",
+            "INSERT OR IGNORE INTO reports (report_id, title, date, status, summary, recommendation, root_id)"
+            " VALUES (:report_id, :title, :date, :status, :summary, :recommendation, :report_id)",
             SEED_REPORTS,
         )
 
@@ -117,9 +125,79 @@ def get_report(report_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def list_reports() -> list[dict]:
+def list_reports(q: str | None = None, statuses: list[str] | None = None, date_from: str | None = None,
+                 date_to: str | None = None, latest_only: bool = False, sort: str = "id") -> list[dict]:
+    """All reports, optionally filtered.
+
+    q            case-insensitive match on id, title, summary, recommendation or change note
+    statuses     keep only these statuses (case-insensitive)
+    date_from/to inclusive ISO dates (YYYY-MM-DD) on the report date
+    latest_only  hide versions that have been superseded by a newer revision
+    sort         "id" | "date_desc" | "date_asc" | "title"
+    """
     with _db() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM reports ORDER BY report_id")]
+        rows = [dict(r) for r in c.execute("SELECT * FROM reports ORDER BY report_id")]
+    if q:
+        needle = q.strip().lower().lstrip("#")
+        rows = [r for r in rows if needle in " ".join(
+            str(r.get(f) or "") for f in ("report_id", "title", "summary", "recommendation", "change_note")).lower()]
+    if statuses:
+        wanted = {s.strip().lower() for s in statuses if s.strip()}
+        rows = [r for r in rows if r["status"].lower() in wanted]
+    if date_from:
+        rows = [r for r in rows if r["date"] >= date_from]
+    if date_to:
+        rows = [r for r in rows if r["date"] <= date_to]
+    if latest_only:
+        rows = [r for r in rows if r["status"] != "Superseded"]
+    if sort == "date_desc":
+        rows.sort(key=lambda r: (r["date"], r["report_id"]), reverse=True)
+    elif sort == "date_asc":
+        rows.sort(key=lambda r: (r["date"], r["report_id"]))
+    elif sort == "title":
+        rows.sort(key=lambda r: (r["title"].lower(), r["version"]))
+    return rows
+
+
+# ---------------------------------------------------------- revision loop
+_VERSION_SUFFIX = re.compile(r"\s*\(v\d+\)\s*$")
+
+
+def base_title(title: str) -> str:
+    return _VERSION_SUFFIX.sub("", title).strip()
+
+
+def version_chain(report_id: int) -> list[dict]:
+    """Every version of the report's family, oldest first."""
+    rep = get_report(report_id)
+    if rep is None:
+        return []
+    with _db() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM reports WHERE root_id = ? ORDER BY version, report_id", (rep["root_id"],))]
+
+
+def create_revision(parent_id: int, summary: str, recommendation: str, change_note: str | None,
+                    date: str) -> dict | None:
+    """Create the next version of a report and mark the parent as superseded. Returns the new report."""
+    with _db() as c:
+        parent = c.execute("SELECT * FROM reports WHERE report_id = ?", (parent_id,)).fetchone()
+        if parent is None:
+            return None
+        parent = dict(parent)
+        root_id = parent["root_id"] or parent["report_id"]
+        latest = c.execute("SELECT MAX(version) FROM reports WHERE root_id = ?", (root_id,)).fetchone()[0] or 1
+        new_version = latest + 1
+        new_id = (c.execute("SELECT MAX(report_id) FROM reports").fetchone()[0] or 100) + 1
+        c.execute(
+            "INSERT INTO reports (report_id, title, date, status, summary, recommendation,"
+            " version, parent_id, root_id, change_note) VALUES (?, ?, ?, 'Pending Review', ?, ?, ?, ?, ?, ?)",
+            (new_id, f"{base_title(parent['title'])} (v{new_version})", date, summary, recommendation,
+             new_version, parent_id, root_id, change_note),
+        )
+        c.execute("UPDATE reports SET status = 'Superseded' WHERE report_id = ?", (parent_id,))
+        row = c.execute("SELECT * FROM reports WHERE report_id = ?", (new_id,)).fetchone()
+    return dict(row)
 
 
 def set_report_status(report_id: int, new_status: str) -> tuple[dict, str] | None:
@@ -140,12 +218,9 @@ def reset() -> None:
     with _db() as c:
         c.execute("DELETE FROM reports")
         c.execute("DELETE FROM pending_dual_sig")
-<<<<<<< Updated upstream
         c.execute("DELETE FROM completed_dual_sig")
         c.execute("DELETE FROM decisions")
-=======
         c.execute("DELETE FROM email_reports")
->>>>>>> Stashed changes
     init_db()
 
 

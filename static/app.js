@@ -65,6 +65,8 @@ function statusBadgeClass(s) {
   if (lower.includes('accept'))  return 'status-accepted';
   if (lower.includes('approve')) return 'status-approved';
   if (lower.includes('declin'))  return 'status-declined';
+  if (lower.includes('revision')) return 'status-revision';
+  if (lower.includes('supersed')) return 'status-superseded';
   return 'status-not-found';
 }
 
@@ -127,10 +129,11 @@ function renderReportCard(r) {
         <div class="field-value">${escHtml(r.recommendation)}</div>
       </div>
       <div style="margin-top:1.1rem;display:flex;gap:0.6rem;flex-wrap:wrap;">
-        <button class="btn-success" onclick="quickDecisionById(${r.report_id},'Accept')">&#10003; Accept Report</button>
-        <button class="btn-danger"  onclick="quickDecisionById(${r.report_id},'Decline')">&#10007; Decline Report</button>
+        <button ${/pending/i.test(r.status) ? '' : 'disabled title="Only reports in Pending Review can be accepted or declined"'} class="btn-success" onclick="quickDecisionById(${r.report_id},'Accept')">&#10003; Accept Report</button>
+        <button ${/pending/i.test(r.status) ? '' : 'disabled title="Only reports in Pending Review can be accepted or declined"'} class="btn-danger"  onclick="quickDecisionById(${r.report_id},'Decline')">&#10007; Decline Report</button>
         ${memoLink(/^(approved|accepted)$/i.test(r.status) ? `/api/memo.pdf?report_id=${r.report_id}` : null)}
       </div>
+      ${window.reportCardExtras ? window.reportCardExtras(r) : ''}
     </div>`;
 }
 

@@ -8,7 +8,6 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-<<<<<<< Updated upstream
       # Embedded agent chat (dashboard "Ask Agent" drawer). Values are set in the Render dashboard.
       - key: WXO_PRIVATE_KEY
         sync: false
@@ -24,10 +23,8 @@ services:
         sync: false
       - key: WXO_AGENT_ENV_ID
         sync: false
-=======
       - key: MAILGUN_SIGNING_KEY
         sync: false   # Set this in the Render dashboard — do NOT commit the real value
       - key: FLASK_ENV
         value: production
->>>>>>> Stashed changes
     healthCheckPath: /healthz

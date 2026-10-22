@@ -68,6 +68,9 @@
       reports.filter(r => r.status === 'Pending Review').forEach(r => items.push({
         kind: 'review', title: `Report #${r.report_id} — ${r.title}`, sub: `Submitted ${r.date} · needs Accept / Decline`, report: r,
       }));
+      reports.filter(r => r.status === 'Revision Requested').forEach(r => items.push({
+        kind: 'watch', title: `Report #${r.report_id} — ${r.title}`, sub: 'Sent back for revision · awaiting a revised version', report: r,
+      }));
     }
     pending.forEach(p => {
       const awaiting = DUAL_ROLES.find(x => x !== p.first_role);
@@ -144,6 +147,8 @@
       );
     } else if (item.kind === 'sign') {
       actions.append(button(`Countersign as ${role}`, 'btn-primary', () => signDual(item.pending.report_title)));
+    } else if (item.report && window.openReportById) {
+      actions.append(button('Open', 'btn-link', () => window.openReportById(item.report.report_id)));
     } else {
       actions.innerHTML = '<span class="queue-tag">Waiting on others</span>';
     }

@@ -82,9 +82,28 @@ def get_report():
 
 @app.route("/api/list_reports", methods=["GET"])
 def list_reports():
+    """List reports. All filters are optional, so a bare call still returns everything.
+
+    ?q=          text search (id, title, summary, recommendation, change note)
+    ?status=     comma-separated statuses, e.g. "Pending Review,Revision Requested"
+    ?from= &to=  report date range, YYYY-MM-DD (inclusive)
+    ?latest=1    hide superseded versions
+    ?sort=       id | date_desc | date_asc | title
+    """
+    a = request.args
+    rows = store.list_reports(
+        q=a.get("q") or None,
+        statuses=[x for x in (a.get("status") or "").split(",") if x.strip()] or None,
+        date_from=a.get("from") or None,
+        date_to=a.get("to") or None,
+        latest_only=a.get("latest", "").lower() in ("1", "true", "yes"),
+        sort=a.get("sort") or "id",
+    )
     return jsonify([
-        {"report_id": r["report_id"], "title": r["title"], "date": r["date"], "status": r["status"]}
-        for r in store.list_reports()
+        {"report_id": r["report_id"], "title": r["title"], "date": r["date"], "status": r["status"],
+         "summary": r["summary"], "version": r["version"], "parent_id": r["parent_id"],
+         "root_id": r["root_id"], "change_note": r["change_note"]}
+        for r in rows
     ])
 
 
@@ -99,7 +118,8 @@ def compare_reports():
     a = store.get_report(id_a) or _not_found_report(id_a, f"Report {id_a} Not Found")
     b = store.get_report(id_b) or _not_found_report(id_b, f"Report {id_b} Not Found")
 
-    fields = ["title", "date", "status", "summary", "recommendation"]
+    a.setdefault("version", "N/A"); b.setdefault("version", "N/A")
+    fields = ["title", "version", "date", "status", "summary", "recommendation"]
     diffs = [
         {"field": f.replace("_", " ").title(),
          "report_a_value": str(a[f]),
@@ -147,6 +167,20 @@ def update_report_status():
     if decision not in {"Accept", "Decline"}:
         decision = "Decline"
     new_status = "Accepted" if decision == "Accept" else "Declined"
+
+    current = store.get_report(report_id)
+    if current and current["status"] in ("Superseded", "Revision Requested"):
+        newer = [r for r in store.version_chain(report_id) if r["version"] > current["version"]]
+        hint = (f" Review the latest version instead: Report #{newer[-1]['report_id']}." if newer
+                else " Submit a revised version first.")
+        return jsonify({
+            "report_id": report_id, "report_title": current["title"],
+            "previous_status": current["status"], "new_status": current["status"],
+            "decision": decision, "reason": reason, "timestamp_utc": timestamp,
+            "confirmation_message": f"Report {report_id} is '{current['status']}' and can't be "
+                                    f"{'accepted' if decision == 'Accept' else 'declined'}.{hint}",
+            "memo_url": None,
+        })
 
     result = store.set_report_status(report_id, new_status)
     if result is None:
@@ -671,7 +705,7 @@ def _record(report_title, decision, decided_by, timestamp, notes, next_steps, me
 
 
 # Keep a matching system report's status in step with approval decisions.
-_STATUS_FOR_DECISION = {"Approved": "Approved", "Rejected": "Declined", "Revision Requested": "Pending Review"}
+_STATUS_FOR_DECISION = {"Approved": "Approved", "Rejected": "Declined", "Revision Requested": "Revision Requested"}
 
 
 def _log_final(report_title, decision, decided_by, timestamp, notes):
@@ -795,6 +829,83 @@ def record_approval_decision():
         complete=(decision == "Approved"),
     )
 
+
+
+# ---------------------------------------------------------------------------
+# Revision loop: request revision → submit v2 → compare v1 vs v2
+# ---------------------------------------------------------------------------
+@app.route("/api/request_revision", methods=["POST"])
+def request_revision():
+    data = request.get_json(silent=True) or {}
+    try:
+        report_id = int(data.get("report_id", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid report_id"}), 400
+    notes = (data.get("notes") or "").strip() or None
+    decided_by = str(data.get("decided_by") or "Executive").strip()[:80]
+    report = store.get_report(report_id)
+    if report is None:
+        return jsonify({"ok": False, "message": f"Report {report_id} was not found."}), 404
+    if report["status"] != "Pending Review":
+        return jsonify({"ok": False, "report": report,
+                        "message": f"Only reports that are 'Pending Review' can be sent back. "
+                                   f"Report {report_id} is '{report['status']}'."}), 409
+    ts = _now()
+    store.set_report_status(report_id, "Revision Requested")
+    store.log_decision(report["title"], "Revision Requested", decided_by, ts, notes, report_id=report_id)
+    report["status"] = "Revision Requested"
+    return jsonify({
+        "ok": True, "report": report, "timestamp_utc": ts,
+        "message": f"Revision requested on Report {report_id} ({report['title']}) by {decided_by}."
+                   + (f" Notes: \"{notes}\"." if notes else "")
+                   + " The report owner can now submit a revised version.",
+    })
+
+
+@app.route("/api/submit_revision", methods=["POST"])
+def submit_revision():
+    data = request.get_json(silent=True) or {}
+    try:
+        report_id = int(data.get("report_id", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid report_id"}), 400
+    parent = store.get_report(report_id)
+    if parent is None:
+        return jsonify({"ok": False, "message": f"Report {report_id} was not found."}), 404
+    if parent["status"] != "Revision Requested":
+        return jsonify({"ok": False, "message": f"Report {report_id} is '{parent['status']}'. A revision can only "
+                                                "be submitted after one has been requested."}), 409
+    summary = (data.get("summary") or "").strip() or parent["summary"]
+    recommendation = (data.get("recommendation") or "").strip() or parent["recommendation"]
+    change_note = (data.get("change_note") or "").strip() or None
+    submitted_by = str(data.get("submitted_by") or "Report Owner").strip()[:80]
+    if summary == parent["summary"] and recommendation == parent["recommendation"]:
+        return jsonify({"ok": False, "message": "The revision is identical to the previous version. "
+                                                "Change the summary or recommendation first."}), 422
+
+    ts = _now()
+    new = store.create_revision(report_id, summary, recommendation, change_note, ts[:10])
+    store.log_decision(parent["title"], "Superseded", submitted_by, ts,
+                       f"Replaced by Report #{new['report_id']} ({new['title']})", report_id=report_id)
+    store.log_decision(new["title"], "Revision Submitted", submitted_by, ts, change_note, report_id=new["report_id"])
+    return jsonify({
+        "ok": True, "report": new, "previous_report_id": report_id,
+        "compare_url": f"/api/compare_reports?report_id_a={report_id}&report_id_b={new['report_id']}",
+        "message": f"Revised version submitted: Report #{new['report_id']} — {new['title']} is now Pending Review. "
+                   f"Report #{report_id} is marked Superseded.",
+    })
+
+
+@app.route("/api/report_versions", methods=["GET"])
+def report_versions():
+    try:
+        report_id = int(request.args.get("report_id", 0))
+    except ValueError:
+        return jsonify({"error": "Invalid report_id"}), 400
+    chain = store.version_chain(report_id)
+    if not chain:
+        return jsonify({"error": f"Report {report_id} not found"}), 404
+    return jsonify([{**r, "history": store.decision_history(r["title"])} for r in chain])
 
 
 # ---------------------------------------------------------------------------

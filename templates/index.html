@@ -152,6 +152,36 @@
 
     <!-- ── SYSTEM REPORTS VIEW ── -->
     <section id="view-reports" class="view">
+      <!-- ── Report library: search + filters ── -->
+      <div class="panel library-panel">
+        <div class="panel-header">
+          <h3>Report Library</h3>
+          <div class="library-filters" role="search">
+            <input type="search" id="lib-q" placeholder="Search ID, title, summary, notes…" aria-label="Search reports" />
+            <select id="lib-status" aria-label="Status">
+              <option value="">All statuses</option>
+              <option value="Pending Review">Pending Review</option>
+              <option value="Revision Requested">Revision Requested</option>
+              <option value="Accepted,Approved">Accepted / Approved</option>
+              <option value="Declined">Declined</option>
+              <option value="Superseded">Superseded</option>
+            </select>
+            <label class="lib-date">From <input type="date" id="lib-from" /></label>
+            <label class="lib-date">To <input type="date" id="lib-to" /></label>
+            <select id="lib-sort" aria-label="Sort">
+              <option value="date_desc">Newest first</option>
+              <option value="date_asc">Oldest first</option>
+              <option value="id">By ID</option>
+              <option value="title">By title</option>
+            </select>
+            <label class="checkbox-label lib-latest"><input type="checkbox" id="lib-latest" checked /> Latest versions only</label>
+            <button class="btn-link" id="lib-clear" type="button">Clear</button>
+          </div>
+        </div>
+        <div class="lib-count" id="lib-count" aria-live="polite"></div>
+        <div id="lib-results" class="lib-results"><p class="placeholder">Loading…</p></div>
+      </div>
+
       <div class="panel">
         <div class="panel-header">
           <h3>System Reports</h3>
@@ -397,5 +427,6 @@
 
   <script src="/static/app.js"></script>
   <script src="/static/workspace.js"></script>
+  <script src="/static/library.js"></script>
 </body>
 </html>
