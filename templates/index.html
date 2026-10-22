@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Financial Report Review Agent</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/workspace.css" />
 </head>
 <body>
   <!-- Sidebar -->
@@ -79,7 +80,16 @@
       <h1 class="topbar-title" id="view-title">Dashboard</h1>
       <div class="topbar-meta">
         <span id="current-time"></span>
-        <span class="badge badge-executive">Executive</span>
+        <label class="role-switch" title="Switch who you are acting as">
+          <span class="role-switch-label">Acting as</span>
+          <select id="role-select" aria-label="Acting as">
+            <option>Boss</option>
+            <option>CFO</option>
+            <option>VP Finance</option>
+          </select>
+          <span class="role-count" id="role-count" hidden title="Items waiting on you"></span>
+        </label>
+        <button class="chat-toggle" id="chat-toggle" aria-controls="chat-drawer" aria-expanded="false" aria-label="Ask Agent">&#128172;<span class="chat-toggle-text"> Ask Agent</span></button>
       </div>
     </header>
 
@@ -88,6 +98,14 @@
       <div class="welcome-card">
         <h2>Welcome to the Financial Report Review Agent</h2>
         <p>Upload or describe a financial report and receive executive-level statistics, variance analysis, and a structured approval workflow. <strong>You make the final call — the data is here for you.</strong></p>
+      </div>
+
+      <div class="panel queue-panel">
+        <div class="panel-header queue-header">
+          <h3>Waiting on you</h3>
+          <span class="queue-hint">Switch role in the top bar to see the CFO or VP Finance queue.</span>
+        </div>
+        <div id="my-queue" class="queue-list"><p class="placeholder">Loading…</p></div>
       </div>
 
       <div class="stat-grid" id="stat-grid">
@@ -256,6 +274,12 @@
             <label>Decided By</label>
             <input type="text" id="approve-by" placeholder="e.g. CFO, VP Finance" />
           </div>
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="approve-dual" />
+              Dual-signature approval (overrun &gt; $50,000 — CFO + VP Finance)
+            </label>
+          </div>
           <div class="form-group full-width">
             <label>Notes (optional)</label>
             <textarea id="approve-notes" rows="3" placeholder="Any conditions or comments…"></textarea>
@@ -316,6 +340,18 @@
     <div id="toast" class="toast hidden"></div>
   </main>
 
+  <!-- ── Embedded agent chat ── -->
+  <aside class="chat-drawer" id="chat-drawer" aria-label="Agent chat">
+    <div class="chat-drawer-header">
+      <span>Financial Review Agent</span>
+      <button class="chat-close" id="chat-close" aria-label="Close chat">&times;</button>
+    </div>
+    <div class="chat-mount" id="chat-mount">
+      <div class="chat-status" id="chat-status">Connecting to the agent…</div>
+    </div>
+  </aside>
+
   <script src="/static/app.js"></script>
+  <script src="/static/workspace.js"></script>
 </body>
 </html>

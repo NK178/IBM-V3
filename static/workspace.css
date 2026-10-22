@@ -1,0 +1,96 @@
+/* ── Role switcher (top bar) ── */
+.role-switch {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
+  padding: 0.2rem 0.4rem 0.2rem 0.85rem; font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.role-switch select {
+  background: transparent; color: var(--text); border: none; font: inherit; font-size: 13px;
+  font-weight: 600; padding: 0.15rem 0.25rem; cursor: pointer;
+}
+.role-switch select:focus-visible { outline: 2px solid var(--accent); border-radius: 6px; }
+.role-switch select option { background: var(--surface); color: var(--text); }
+.role-count {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+  background: var(--warning); color: #1a1205; font-size: 11px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.role-count[hidden] { display: none; }
+
+body[data-role="CFO"] .role-switch        { border-color: rgba(79, 142, 247, 0.6); }
+body[data-role="VP Finance"] .role-switch { border-color: rgba(34, 197, 94, 0.6); }
+
+.chat-toggle {
+  background: var(--accent); color: #fff; border: none; border-radius: 8px;
+  padding: 0.45rem 0.9rem; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.chat-toggle:hover { background: var(--accent-hover); }
+
+/* ── "Waiting on you" queue ── */
+.queue-panel { margin-bottom: 1.5rem; }
+.queue-header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+.queue-header h3 { margin-bottom: 0.5rem; }
+.queue-hint { color: var(--muted); font-size: 12px; }
+.queue-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.queue-empty { color: var(--muted); padding: 0.5rem 0; }
+.queue-item {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: 0.75rem 1rem; border-radius: 8px; background: var(--surface-2);
+  border: 1px solid var(--border); border-left: 3px solid var(--border);
+}
+.queue-review { border-left-color: var(--accent); }
+.queue-sign   { border-left-color: var(--warning); }
+.queue-watch  { opacity: 0.8; }
+.queue-text { flex: 1; min-width: 200px; }
+.queue-title { font-weight: 600; }
+.queue-sub { color: var(--muted); font-size: 12px; }
+.queue-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.queue-actions button { padding: 0.4rem 0.85rem; font-size: 13px; }
+.queue-tag { font-size: 12px; color: var(--muted); }
+
+/* ── Approve form checkbox ── */
+.checkbox-label {
+  display: flex !important; align-items: center; gap: 0.5rem; cursor: pointer;
+  text-transform: none !important; letter-spacing: 0 !important; font-size: 13px !important;
+  color: var(--text) !important; padding-top: 1.6rem;
+}
+.checkbox-label input { width: auto; accent-color: var(--accent); }
+
+/* ── Approval card: role-aware sign button state ── */
+.approval-next-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.approval-role-note { font-size: 11px; color: var(--muted); margin-top: 0.4rem; text-align: center; }
+
+/* ── Chat drawer ── */
+.chat-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw);
+  background: var(--surface); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; z-index: 200;
+  transform: translateX(100%); transition: transform 0.2s ease;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
+}
+.chat-drawer.open { transform: none; }
+.chat-drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.85rem 1rem; border-bottom: 1px solid var(--border); font-weight: 600;
+}
+.chat-close {
+  background: none; border: none; color: var(--muted); font-size: 22px; line-height: 1; cursor: pointer;
+}
+.chat-close:hover { color: var(--text); }
+.chat-mount { flex: 1; min-height: 0; position: relative; }
+.chat-status {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  padding: 1.5rem; text-align: center; color: var(--muted); line-height: 1.7;
+}
+
+/* Leave room for the drawer on wide screens instead of covering content */
+@media (min-width: 1200px) {
+  body.chat-open .main { margin-right: min(440px, 100vw); }
+}
+
+@media (max-width: 760px) {
+  .role-switch-label, .chat-toggle-text, #current-time { display: none; }
+  .chat-toggle { padding: 0.45rem 0.65rem; }
+  .topbar { padding: 0.75rem 1rem; gap: 0.5rem; }
+  .topbar-meta { gap: 0.5rem; }
+}

@@ -297,6 +297,7 @@ async function recordDecision() {
   const dec    = document.getElementById('approve-decision').value;
   const by     = document.getElementById('approve-by').value.trim();
   const notes  = document.getElementById('approve-notes').value.trim();
+  const dual   = !!document.getElementById('approve-dual')?.checked;
   const out    = document.getElementById('approve-output');
 
   if (!title) { showToast('Please enter a report title.', 'error'); return; }
@@ -307,7 +308,7 @@ async function recordDecision() {
     const res = await fetch('/api/record_approval_decision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ report_title: title, decision: dec, decided_by: by, notes: notes || null }),
+      body: JSON.stringify({ report_title: title, decision: dec, decided_by: by, notes: notes || null, requires_dual_signature: dual }),
     });
     const r = await res.json();
     out.innerHTML = renderApprovalConfirm(r);
@@ -321,6 +322,7 @@ async function recordDecision() {
     });
     showToast('Decision recorded.');
     loadDashboardStats();
+    if (window.notifyDataChanged) window.notifyDataChanged();
   } catch (e) {
     out.innerHTML = `<p class="placeholder">Error: ${e.message}</p>`;
   }
@@ -328,12 +330,12 @@ async function recordDecision() {
 
 function renderApprovalConfirm(r) {
   const cls = r.decision === 'Approved' ? 'confirm-approved'
-            : r.decision === 'Rejected' ? 'confirm-rejected'
+            : r.decision === 'Rejected' || r.decision === 'Signature Not Accepted' ? 'confirm-rejected'
             : 'confirm-revision';
   const steps = r.next_steps.map(s => `<li>${escHtml(s)}</li>`).join('');
   return `
     <div class="confirm-card ${cls}">
-      <div class="confirm-msg">${escHtml(r.confirmation_message)}</div>
+      <div class="confirm-msg">${escHtml(String(r.confirmation_message).replace(/\*\*/g, ''))}</div>
       <div style="color:var(--muted);font-size:12px;margin-bottom:.75rem;">Recorded: ${escHtml(r.timestamp_utc)}${r.notes ? ' | Notes: ' + escHtml(r.notes) : ''}</div>
       <div class="field-label" style="margin-bottom:.4rem;">Next Steps</div>
       <ul class="next-steps-list">${steps}</ul>
@@ -386,6 +388,7 @@ async function _postDecision(reportId, dec, reason, out, append = false) {
     }
     showToast(`Report ${reportId} ${dec.toLowerCase()}ed.`);
     loadDashboardStats();
+    if (window.notifyDataChanged) window.notifyDataChanged();
   } catch (e) {
     out.innerHTML = `<p class="placeholder">Error: ${e.message}</p>`;
   }
@@ -438,7 +441,7 @@ function auditRecord(reportId, type, opts = {}) {
   if (!_auditStore.has(reportId)) _auditStore.set(reportId, []);
   _auditStore.get(reportId).push({
     type,
-    actor:  opts.actor  || 'Executive',
+    actor:  opts.actor  || (window.currentRole ? window.currentRole() : 'Executive'),
     detail: opts.detail || null,
     reason: opts.reason || null,
     ts:     new Date(),
@@ -883,7 +886,7 @@ const APPROVAL_TIERS = {
   'standard': {
     label:           'Standard',
     badgeClass:      'tier-standard',
-    approvers:       ['CFO', 'Finance Director'],
+    approvers:       ['VP Finance'],
     nextAction:      'Submit for Approval',
     dualSig:         false,
   },
@@ -891,7 +894,7 @@ const APPROVAL_TIERS = {
     label:           'Dual-Sig',
     badgeClass:      'tier-dual',
     approvers:       ['CFO', 'VP Finance'],
-    nextAction:      'Awaiting VP Signature',
+    nextAction:      'Sign',
     dualSig:         true,
   },
 };
@@ -933,23 +936,9 @@ function renderApprovalCard(tierKey, report) {
     .map(a => `<li>${escHtml(a)}</li>`)
     .join('');
 
-  // Dual-sig tracker visibility + CFO pre-signed audit event
+  // Dual-sig tracker: driven by the shared store (/api/pending_signatures)
   if (tier.dualSig) {
     tracker.classList.remove('hidden');
-    // Reset tracker to initial state (CFO ✓, VP pending) each time card renders
-    const cfoDot    = document.querySelector('#tracker-step-cfo .step-dot');
-    const cfoStatus = document.querySelector('#tracker-step-cfo .step-status');
-    const vpDot     = document.querySelector('#tracker-step-vp .step-dot');
-    const vpStatus  = document.querySelector('#tracker-step-vp .step-status');
-    const conn      = document.querySelector('.tracker-connector');
-    if (cfoDot)    { cfoDot.className = 'step-dot step-done'; cfoDot.textContent = '✓'; }
-    if (cfoStatus) { cfoStatus.className = 'step-status step-status-done'; cfoStatus.textContent = 'Signed'; }
-    if (vpDot)     { vpDot.className = 'step-dot step-pending'; vpDot.textContent = ''; }
-    if (vpStatus)  { vpStatus.className = 'step-status step-status-pending'; vpStatus.textContent = 'Pending'; }
-    if (conn)      { conn.style.background = ''; }
-    // Record CFO first-signature in audit trail
-    const auditId = report.id ? String(report.id) : 'financial';
-    auditRecord(auditId, 'signed', { actor: 'CFO', detail: report.title });
   } else {
     tracker.classList.add('hidden');
   }
@@ -957,14 +946,63 @@ function renderApprovalCard(tierKey, report) {
   // Next-action button
   nextBtn.disabled    = false;
   nextBtn.textContent = tier.nextAction;
+  nextBtn.style.background = '';
 
-  // For dual-sig, style the button as warning-toned while VP is still pending
-  if (tier.dualSig) {
-    nextBtn.style.background = 'rgba(245,158,11,0.8)';
+  if (tier.dualSig) syncDualTracker();
+}
+
+/* ── Dual-signature tracker (real state, role-aware) ── */
+const DUAL_ROLES = ['CFO', 'VP Finance'];
+
+function _setStep(stepId, signed) {
+  const dot    = document.querySelector(`#${stepId} .step-dot`);
+  const status = document.querySelector(`#${stepId} .step-status`);
+  if (dot)    { dot.className = 'step-dot ' + (signed ? 'step-done' : 'step-pending'); dot.textContent = signed ? '✓' : ''; }
+  if (status) { status.className = 'step-status ' + (signed ? 'step-status-done' : 'step-status-pending'); status.textContent = signed ? 'Signed' : 'Pending'; }
+}
+
+async function syncDualTracker() {
+  if (_currentTier !== 'dual' || !_currentReport) return;
+  const title   = _currentReport.title;
+  const nextBtn = document.getElementById('approval-next-btn');
+  const conn    = document.querySelector('.tracker-connector');
+  const role    = window.currentRole ? window.currentRole() : 'Boss';
+
+  const same = (t) => t.trim().toLowerCase() === title.trim().toLowerCase();
+  let pending = null, done = false;
+  try {
+    const sigs = await (await fetch('/api/dual_signatures')).json();
+    pending = sigs.pending.find(p => same(p.report_title)) || null;
+    done    = !pending && sigs.completed.some(c => same(c.report_title));
+  } catch (_) { return; /* leave tracker as-is */ }
+  if (_currentTier !== 'dual' || !_currentReport || _currentReport.title !== title) return;  // card changed meanwhile
+
+  const signed = new Set(done ? DUAL_ROLES : pending ? [pending.first_role] : []);
+  _setStep('tracker-step-cfo', signed.has('CFO'));
+  _setStep('tracker-step-vp',  signed.has('VP Finance'));
+  if (conn) conn.style.background = done ? 'var(--success)' : '';
+
+  nextBtn.style.background = '';
+  if (done) {
+    nextBtn.textContent = 'Dual-Sig Complete';
+    nextBtn.style.background = 'var(--success)';
+    nextBtn.disabled = true;
+  } else if (!DUAL_ROLES.includes(role)) {
+    const who = pending ? DUAL_ROLES.find(r => r !== pending.first_role) : 'CFO or VP Finance';
+    nextBtn.textContent = `Awaiting ${who}`;
+    nextBtn.disabled = true;
+  } else if (signed.has(role)) {
+    nextBtn.textContent = `Awaiting ${DUAL_ROLES.find(r => r !== role)}`;
+    nextBtn.disabled = true;
   } else {
-    nextBtn.style.background = '';   // fall back to CSS default (accent)
+    nextBtn.textContent = pending ? `Countersign as ${role}` : `Sign as ${role}`;
+    nextBtn.style.background = 'rgba(245,158,11,0.8)';
+    nextBtn.disabled = false;
   }
 }
+
+document.addEventListener('rolechange', syncDualTracker);
+document.addEventListener('datachange', syncDualTracker);
 
 /** Reset card to idle state (no report selected) */
 function resetApprovalCard() {
@@ -996,27 +1034,14 @@ function approvalNextAction() {
     auditRecord(auditId, 'cleared', { detail: _currentReport.title });
     showToast('Report auto-cleared — no manual signature required.', 'success');
   } else if (_currentTier === 'standard') {
-    auditRecord(auditId, 'routed',    { detail: _currentReport.title, actor: 'Executive' });
-    auditRecord(auditId, 'submitted', { detail: 'Sent to CFO & Finance Director', actor: 'Executive' });
-    showToast(`Submitted "${_currentReport.title}" to CFO & Finance Director.`, 'success');
+    auditRecord(auditId, 'routed',    { detail: _currentReport.title });
+    auditRecord(auditId, 'submitted', { detail: 'Sent to VP Finance' });
+    showToast(`Submitted "${_currentReport.title}" to VP Finance.`, 'success');
   } else if (_currentTier === 'dual') {
-    // Simulate advancing VP step
-    const vpDot    = document.querySelector('#tracker-step-vp .step-dot');
-    const vpStatus = document.querySelector('#tracker-step-vp .step-status');
-    const conn     = document.querySelector('.tracker-connector');
-    const nextBtn  = document.getElementById('approval-next-btn');
-
-    vpDot.className      = 'step-dot step-done';
-    vpDot.textContent    = '✓';
-    vpStatus.className   = 'step-status step-status-done';
-    vpStatus.textContent = 'Signed';
-    conn.style.background = 'var(--success)';
-
-    nextBtn.textContent       = 'Dual-Sig Complete';
-    nextBtn.style.background  = 'var(--success)';
-    nextBtn.disabled          = true;
-    auditRecord(auditId, 'countersigned', { actor: 'VP Finance', detail: _currentReport.title });
-    showToast('VP Finance signature recorded — dual-sig complete.', 'success');
+    const title = _currentReport.title;
+    const btn = document.getElementById('approval-next-btn');
+    btn.disabled = true;
+    window.signDualAsCurrentRole(title).then(() => syncDualTracker()).catch(e => { showToast(`Could not record signature: ${e.message}`, 'error'); syncDualTracker(); });
   }
 }
 
@@ -1048,7 +1073,9 @@ generateFinancialReport = async function () {
   const banner = document.querySelector('#financial-output .status-banner');
   if (banner) {
     const text = banner.textContent || '';
-    const fakeReport = { id: null, title: text, status: 'Pending Review' };
+    // Use the report type as the title so signatures line up with the chat agent's records
+    const reportType = document.getElementById('report-type-select')?.value || text;
+    const fakeReport = { id: null, title: reportType, status: 'Pending Review' };
     const tier = text.toLowerCase().includes('critical') ? 'dual'
                : text.toLowerCase().includes('scrutiny') ? 'standard'
                : 'auto';

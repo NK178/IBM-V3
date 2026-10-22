@@ -5,8 +5,10 @@ import io
 import json
 
 import store
+from chat_auth import bp as chat_bp
 
 app = Flask(__name__)
+app.register_blueprint(chat_bp)
 
 
 def _now() -> str:
@@ -537,6 +539,13 @@ def pending_signatures():
     return jsonify(store.list_pending_signatures())
 
 
+@app.route("/api/dual_signatures", methods=["GET"])
+def dual_signatures():
+    """Pending and completed dual-signature approvals (drives the dashboard tracker)."""
+    return jsonify({"pending": store.list_pending_signatures(),
+                    "completed": store.list_completed_signatures()})
+
+
 @app.route("/api/record_approval_decision", methods=["POST"])
 def record_approval_decision():
     data = request.get_json(silent=True) or {}
@@ -594,8 +603,8 @@ def record_approval_decision():
                 pending=awaiting,
             )
 
-        store.clear_pending_signature(report_title)
         first_signer, first_ts = pending["first_signer"], pending["first_timestamp"]
+        store.complete_dual_signature(report_title, f"{first_signer} + {decided_by}", timestamp)
         combined_notes = "; ".join(filter(None, [pending.get("notes"), notes])) or None
         return _record(
             report_title, "Approved", f"{first_signer} + {decided_by}", timestamp, combined_notes,

@@ -71,6 +71,13 @@ def init_db() -> None:
                    first_timestamp TEXT NOT NULL,
                    notes TEXT)"""
         )
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS completed_dual_sig (
+                   report_key TEXT PRIMARY KEY,
+                   report_title TEXT NOT NULL,
+                   signers TEXT NOT NULL,
+                   completed_timestamp TEXT NOT NULL)"""
+        )
         c.executemany(
             "INSERT OR IGNORE INTO reports VALUES (:report_id, :title, :date, :status, :summary, :recommendation)",
             SEED_REPORTS,
@@ -107,6 +114,7 @@ def reset() -> None:
     with _db() as c:
         c.execute("DELETE FROM reports")
         c.execute("DELETE FROM pending_dual_sig")
+        c.execute("DELETE FROM completed_dual_sig")
     init_db()
 
 
@@ -127,7 +135,9 @@ def list_pending_signatures() -> list[dict]:
 
 
 def add_pending_signature(report_title: str, signer: str, role: str, timestamp: str, notes: str | None) -> None:
+    """Start a dual-signature cycle (also clears any earlier completed cycle for this title)."""
     with _db() as c:
+        c.execute("DELETE FROM completed_dual_sig WHERE report_key = ?", (_key(report_title),))
         c.execute(
             "INSERT OR REPLACE INTO pending_dual_sig VALUES (?, ?, ?, ?, ?, ?)",
             (_key(report_title), report_title, signer, role, timestamp, notes),
@@ -137,6 +147,22 @@ def add_pending_signature(report_title: str, signer: str, role: str, timestamp: 
 def clear_pending_signature(report_title: str) -> None:
     with _db() as c:
         c.execute("DELETE FROM pending_dual_sig WHERE report_key = ?", (_key(report_title),))
+
+
+
+def complete_dual_signature(report_title: str, signers: str, timestamp: str) -> None:
+    """Close a dual-signature cycle: drop the pending row and remember the completion."""
+    with _db() as c:
+        c.execute("DELETE FROM pending_dual_sig WHERE report_key = ?", (_key(report_title),))
+        c.execute(
+            "INSERT OR REPLACE INTO completed_dual_sig VALUES (?, ?, ?, ?)",
+            (_key(report_title), report_title, signers, timestamp),
+        )
+
+
+def list_completed_signatures() -> list[dict]:
+    with _db() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM completed_dual_sig ORDER BY completed_timestamp")]
 
 
 init_db()

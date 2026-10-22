@@ -8,4 +8,19 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      # Embedded agent chat (dashboard "Ask Agent" drawer). Values are set in the Render dashboard.
+      - key: WXO_PRIVATE_KEY
+        sync: false
+      - key: IBM_PUBLIC_KEY
+        sync: false
+      - key: WXO_ORCHESTRATION_ID
+        sync: false
+      - key: WXO_HOST_URL
+        sync: false
+      - key: WXO_CRN
+        sync: false
+      - key: WXO_AGENT_ID
+        sync: false
+      - key: WXO_AGENT_ENV_ID
+        sync: false
     healthCheckPath: /healthz
