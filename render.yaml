@@ -23,7 +23,7 @@ services:
         sync: false
       - key: WXO_AGENT_ID
         sync: false
-      - key: WXO_AGENT_ENV_ID
+      - key: WXO_AGENT_ENV_ID   # optional: only if your embed snippet includes agentEnvironmentId
         sync: false
       # Mailgun inbound webhook signing key (verifies inbound email authenticity)
       - key: MAILGUN_SIGNING_KEY

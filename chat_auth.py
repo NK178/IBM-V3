@@ -7,7 +7,7 @@ Env vars (set in Render):
   WXO_HOST_URL           "
   WXO_CRN                "
   WXO_AGENT_ID           "
-  WXO_AGENT_ENV_ID       "
+  WXO_AGENT_ENV_ID       optional — only if your snippet has chatOptions.agentEnvironmentId
   WXO_DEPLOYMENT_PLATFORM  optional, defaults to "ibmcloud"
   CHAT_TOKEN_TTL_SECONDS   optional, defaults to 3600
 If any of these are missing the dashboard still works; the chat panel just says it isn't configured.
@@ -26,7 +26,7 @@ from flask import Blueprint, jsonify, make_response, request
 bp = Blueprint("chat_auth", __name__)
 
 _REQUIRED = ["WXO_PRIVATE_KEY", "IBM_PUBLIC_KEY", "WXO_ORCHESTRATION_ID", "WXO_HOST_URL",
-             "WXO_AGENT_ID", "WXO_AGENT_ENV_ID"]
+             "WXO_AGENT_ID"]
 _COOKIE = "ANONYMOUS-USER-ID"
 
 
@@ -59,7 +59,8 @@ def chat_config():
         "deploymentPlatform": os.environ.get("WXO_DEPLOYMENT_PLATFORM", "ibmcloud"),
         "crn": os.environ.get("WXO_CRN"),
         "agentId": os.environ["WXO_AGENT_ID"],
-        "agentEnvironmentId": os.environ["WXO_AGENT_ENV_ID"],
+        # Newer embed snippets omit this; only send it when it's set.
+        "agentEnvironmentId": os.environ.get("WXO_AGENT_ENV_ID") or None,
     })
 
 

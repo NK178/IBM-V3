@@ -254,7 +254,7 @@
         layout: { form: 'custom', customElement: document.getElementById('chat-mount') },
         chatOptions: {
           agentId: cfg.agentId,
-          agentEnvironmentId: cfg.agentEnvironmentId,
+          ...(cfg.agentEnvironmentId ? { agentEnvironmentId: cfg.agentEnvironmentId } : {}),
           onLoad(instance) {
             status.remove();
             // Tell the agent who is acting, on every message (role can change mid-chat).
