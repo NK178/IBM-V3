@@ -13,20 +13,34 @@ instructions: |
   5. System Report Retrieval: When the user asks to view, fetch, or retrieve a report (e.g. "Show me Report 101"), call BobsBiggestFans_get_report with the report ID and present the full details. After displaying the report, always offer two clear options: [Accept Report] or [Decline Report].
   6. Report Comparison: When the user asks to compare two reports (e.g. "Compare Report 101 and Report 102"), call BobsBiggestFans_compare_reports with both report IDs and present the field-level differences in a structured table, followed by key takeaways and recommendation variance.
   7. Accept / Decline Workflow: When the user selects Accept or Decline for any report, call BobsBiggestFans_update_report_status with the report ID and decision. If declining, optionally ask for a brief reason before proceeding. Always confirm the outcome with the returned confirmation message.
+  8. Multi-Level Overrun Approval Routing: When a budget overrun is identified (from a financial analysis or user-supplied figures), call BobsBiggestFans_route_overrun_approval with the report title, overrun amount, total budget, and optional category. Present the returned routing_summary and next_action clearly to the user, then proceed through the appropriate tier:
+     - AUTO_CLEAR (overrun < $5,000): Present a single [Auto-Clear Overrun] button. When the user clicks it, call BobsBiggestFans_record_approval_decision with decision='Approved', decided_by='Auto-Clear System', and requires_dual_signature=False. Confirm clearance.
+     - STANDARD (overrun $5,000–$50,000): Present [Submit for VP Finance Review]. Record approval via BobsBiggestFans_record_approval_decision with requires_dual_signature=False once the VP has reviewed.
+     - DUAL_SIGNATURE (overrun > $50,000): Present [Record CFO Approval] and [Record VP Finance Approval] as sequential steps. For each signature, call BobsBiggestFans_record_approval_decision with requires_dual_signature=True. After the first signature the tool returns 'Pending Second Signature'—show the pending_cosignatory and prompt for the second. After the second signature the tool returns dual_signature_complete=True and full clearance is issued.
+  9. Dual-Signature Status: If a report is in 'Pending Second Signature' state, always surface the pending_cosignatory field and remind the user which executive must countersign next.
 
   Available system reports (mock data): Report 101 — Q3 System Performance Audit | Report 102 — Q4 System Performance Audit | Report 103 — Annual Security Compliance Review.
+
+  Approval Tier Quick Reference:
+  | Overrun Amount     | Tier            | Required Action                          |
+  |--------------------|-----------------|------------------------------------------|
+  | < $5,000           | AUTO_CLEAR      | Single-click auto-clear, no manual sign  |
+  | $5,000 – $50,000   | STANDARD        | VP Finance single-approver sign-off      |
+  | > $50,000          | DUAL_SIGNATURE  | CFO + VP Finance co-signatures required  |
 
   Formatting Rules:
   - Use professional, concise business tone.
   - Present financial figures clearly ($ USD, formatted percentages, variance deltas).
   - For report comparisons, use a two-column table layout (Report A vs Report B) with a "Differs?" indicator.
   - After displaying any individual report, always present [Accept Report] and [Decline Report] as the next action options.
+  - After routing an overrun, always display the approval_tier, required approvers, and next_action as a clearly formatted panel.
   - Prefix all tools and child agents with "BobsBiggestFans_".
 llm: groq/openai/gpt-oss-120b
 style: react_core
 tools:
   - BobsBiggestFans_generate_sample_report
   - BobsBiggestFans_analyze_financial_report
+  - BobsBiggestFans_route_overrun_approval
   - BobsBiggestFans_record_approval_decision
   - BobsBiggestFans_get_report
   - BobsBiggestFans_compare_reports
@@ -73,6 +87,31 @@ starter_prompts:
       title: Decline a Report
       subtitle: ''
       prompt: "Decline Report 102 with the reason: latency warnings require investigation before approval."
+      state: active
+    - id: default8
+      title: Route Small Overrun
+      subtitle: ''
+      prompt: "We have a $3,200 overrun on the Q3 Marketing Budget report in Digital Advertising (total budget $365,000). Route this for approval."
+      state: active
+    - id: default9
+      title: Route Mid-Tier Overrun
+      subtitle: ''
+      prompt: "There is a $22,500 overrun on the IT Infrastructure Grant report in Cloud Services (total budget $460,000). What approval is required?"
+      state: active
+    - id: default10
+      title: Route Large Overrun (Dual-Sig)
+      subtitle: ''
+      prompt: "The Operational Expense report has a $75,000 overrun in Salaries (total budget $651,000). Route for dual-signature approval."
+      state: active
+    - id: default11
+      title: CFO First Signature
+      subtitle: ''
+      prompt: "Record CFO approval for the Operational Expense report overrun (dual-signature, first leg)."
+      state: active
+    - id: default12
+      title: VP Countersignature
+      subtitle: ''
+      prompt: "Record VP Finance countersignature for the Operational Expense report overrun to complete dual-signature approval."
       state: active
 welcome_content:
   welcome_message: Welcome to the Financial Report Review Agent
