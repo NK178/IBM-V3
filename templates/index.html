@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Financial Report Review Agent</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-icon">&#9783;</span>
+      <span class="brand-name">FinReview</span>
+    </div>
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-view="dashboard">
+        <span class="nav-icon">&#9783;</span> Dashboard
+      </button>
+      <button class="nav-item" data-view="reports">
+        <span class="nav-icon">&#128196;</span> System Reports
+      </button>
+      <button class="nav-item" data-view="financial">
+        <span class="nav-icon">&#128200;</span> Financial Analysis
+      </button>
+      <button class="nav-item" data-view="compare">
+        <span class="nav-icon">&#9878;</span> Compare Reports
+      </button>
+      <button class="nav-item" data-view="approve">
+        <span class="nav-icon">&#9989;</span> Approve / Reject
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <span>Executive Dashboard</span>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main">
+    <header class="topbar">
+      <h1 class="topbar-title" id="view-title">Dashboard</h1>
+      <div class="topbar-meta">
+        <span id="current-time"></span>
+        <span class="badge badge-executive">Executive</span>
+      </div>
+    </header>
+
+    <!-- ── DASHBOARD VIEW ── -->
+    <section id="view-dashboard" class="view active">
+      <div class="welcome-card">
+        <h2>Welcome to the Financial Report Review Agent</h2>
+        <p>Upload or describe a financial report and receive executive-level statistics, variance analysis, and a structured approval workflow. <strong>You make the final call — the data is here for you.</strong></p>
+      </div>
+
+      <div class="stat-grid" id="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total Reports</div>
+          <div class="stat-value" id="stat-total">3</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Pending Review</div>
+          <div class="stat-value" id="stat-pending">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Accepted</div>
+          <div class="stat-value" id="stat-accepted">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Declined</div>
+          <div class="stat-value" id="stat-declined">—</div>
+        </div>
+      </div>
+
+      <div class="quick-actions">
+        <h3>Quick Actions</h3>
+        <div class="action-grid">
+          <button class="action-btn" onclick="switchView('reports')">&#128196; View System Reports</button>
+          <button class="action-btn" onclick="switchView('financial')">&#128200; Generate Financial Report</button>
+          <button class="action-btn" onclick="switchView('compare')">&#9878; Compare Reports</button>
+          <button class="action-btn" onclick="switchView('approve')">&#9989; Record Approval Decision</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── SYSTEM REPORTS VIEW ── -->
+    <section id="view-reports" class="view">
+      <div class="panel">
+        <div class="panel-header">
+          <h3>System Reports</h3>
+          <div class="controls-row">
+            <label>Report ID:</label>
+            <select id="report-id-select">
+              <option value="101">101 — Q3 System Performance Audit</option>
+              <option value="102">102 — Q4 System Performance Audit</option>
+              <option value="103">103 — Annual Security Compliance Review</option>
+            </select>
+            <button class="btn-primary" onclick="fetchReport()">Fetch Report</button>
+          </div>
+        </div>
+        <div id="report-output" class="output-area">
+          <p class="placeholder">Select a report ID and click Fetch Report.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── FINANCIAL ANALYSIS VIEW ── -->
+    <section id="view-financial" class="view">
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Financial Analysis</h3>
+          <div class="controls-row">
+            <label>Report Type:</label>
+            <select id="report-type-select">
+              <option>Q3 Marketing Budget</option>
+              <option>IT Infrastructure Grant</option>
+              <option>Operational Expense Report</option>
+            </select>
+            <label>Department:</label>
+            <input type="text" id="dept-input" placeholder="Corporate" style="width:140px;" />
+            <button class="btn-primary" onclick="generateFinancialReport()">Generate &amp; Analyze</button>
+          </div>
+        </div>
+        <div id="financial-output" class="output-area">
+          <p class="placeholder">Select a report type and click Generate &amp; Analyze.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── COMPARE REPORTS VIEW ── -->
+    <section id="view-compare" class="view">
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Compare Reports</h3>
+          <div class="controls-row">
+            <label>Report A:</label>
+            <select id="compare-a">
+              <option value="101">101</option>
+              <option value="102">102</option>
+              <option value="103">103</option>
+            </select>
+            <label>Report B:</label>
+            <select id="compare-b">
+              <option value="101">101</option>
+              <option value="102" selected>102</option>
+              <option value="103">103</option>
+            </select>
+            <button class="btn-primary" onclick="compareReports()">Compare</button>
+          </div>
+        </div>
+        <div id="compare-output" class="output-area">
+          <p class="placeholder">Select two report IDs and click Compare.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── APPROVE / REJECT VIEW ── -->
+    <section id="view-approve" class="view">
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Record Approval Decision</h3>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Report Title</label>
+            <input type="text" id="approve-title" placeholder="e.g. Q3 Marketing Budget" />
+          </div>
+          <div class="form-group">
+            <label>Decision</label>
+            <select id="approve-decision">
+              <option>Approved</option>
+              <option>Rejected</option>
+              <option>Revision Requested</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Decided By</label>
+            <input type="text" id="approve-by" placeholder="e.g. CFO, VP Finance" />
+          </div>
+          <div class="form-group full-width">
+            <label>Notes (optional)</label>
+            <textarea id="approve-notes" rows="3" placeholder="Any conditions or comments…"></textarea>
+          </div>
+        </div>
+        <button class="btn-primary" onclick="recordDecision()">Submit Decision</button>
+        <div id="approve-output" class="output-area" style="margin-top:1.5rem;">
+          <p class="placeholder">Fill in the form and click Submit Decision.</p>
+        </div>
+      </div>
+
+      <!-- Quick Accept / Decline for system reports -->
+      <div class="panel" style="margin-top:1.5rem;">
+        <div class="panel-header">
+          <h3>Quick Accept / Decline System Report</h3>
+        </div>
+        <div class="controls-row">
+          <label>Report ID:</label>
+          <select id="quick-report-id">
+            <option value="101">101</option>
+            <option value="102">102</option>
+            <option value="103">103</option>
+          </select>
+          <input type="text" id="quick-reason" placeholder="Decline reason (optional)" style="flex:1;" />
+          <button class="btn-success" onclick="quickDecision('Accept')">&#10003; Accept</button>
+          <button class="btn-danger" onclick="quickDecision('Decline')">&#10007; Decline</button>
+        </div>
+        <div id="quick-output" class="output-area" style="margin-top:1rem;">
+          <p class="placeholder">Select a report and click Accept or Decline.</p>
+        </div>
+      </div>
+    </section>
+
+    <div id="toast" class="toast hidden"></div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
