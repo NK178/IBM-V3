@@ -1,6 +1,31 @@
 from ibm_watsonx_orchestrate.agent_builder.tools import tool, ToolPermission
+from ibm_watsonx_orchestrate.agent_builder.connections import ConnectionType
+from ibm_watsonx_orchestrate.run import connections
 from pydantic import BaseModel
 from typing import Optional
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# Report and approval state lives in the shared store behind the Render web app
+# (app.py + store.py), so the chat and the dashboard always agree.
+# The base URL comes from the key_value connection below, key "base_url".
+APP_ID = "bobs_report_api"
+
+
+def _api(method: str, path: str, params: Optional[dict] = None, body: Optional[dict] = None) -> dict:
+    base = connections.key_value(APP_ID)["base_url"].rstrip("/")
+    url = f"{base}{path}" + (f"?{urllib.parse.urlencode(params)}" if params else "")
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        # Generous timeout: a sleeping Render free instance can take ~50s to wake up.
+        with urllib.request.urlopen(req, timeout=75) as resp:
+            return json.loads(resp.read())
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise RuntimeError(f"Report service is unavailable ({e}). Try again in a minute.") from e
 
 
 class ReportDetail(BaseModel):
@@ -12,55 +37,16 @@ class ReportDetail(BaseModel):
     recommendation: str
 
 
-# ---------------------------------------------------------------------------
-# In-memory mock data store shared across tools in this module.
-# Import and mutate MOCK_REPORTS from other tool files via the helper below.
-# ---------------------------------------------------------------------------
-MOCK_REPORTS: dict[int, dict] = {
-    101: {
-        "report_id": 101,
-        "title": "Q3 System Performance Audit",
-        "date": "2026-09-15",
-        "status": "Pending Review",
-        "summary": "CPU utilization averaged 68%, memory peak at 82%, zero unauthorized access attempts detected.",
-        "recommendation": "Upgrade server pool B prior to Q4 traffic spikes.",
-    },
-    102: {
-        "report_id": 102,
-        "title": "Q4 System Performance Audit",
-        "date": "2026-10-15",
-        "status": "Pending Review",
-        "summary": "CPU utilization averaged 84%, memory peak at 94%, 2 minor latency warnings detected.",
-        "recommendation": "Immediate scaling of server pool B required.",
-    },
-    103: {
-        "report_id": 103,
-        "title": "Annual Security Compliance Review",
-        "date": "2026-10-01",
-        "status": "Approved",
-        "summary": "Fully compliant with ISO/IEC 27001 standards.",
-        "recommendation": "Maintain current access control policies.",
-    },
-}
-
-
-@tool(permission=ToolPermission.READ_ONLY)
+@tool(
+    permission=ToolPermission.READ_ONLY,
+    expected_credentials=[{"app_id": APP_ID, "type": ConnectionType.KEY_VALUE}],
+)
 def BobsBiggestFans_get_report(report_id: int) -> ReportDetail:
-    """Retrieve a single system report by its ID from the mock data store.
+    """Retrieve a single system report by its ID from the shared report store.
 
     Args:
         report_id (int): The numeric ID of the report to retrieve (e.g. 101, 102, 103).
     Returns:
         ReportDetail: Full report details including title, date, status, summary, and recommendation.
     """
-    report = MOCK_REPORTS.get(report_id)
-    if report is None:
-        return ReportDetail(
-            report_id=report_id,
-            title="Report Not Found",
-            date="N/A",
-            status="Not Found",
-            summary=f"No report with ID {report_id} exists in the data store.",
-            recommendation="Please request a valid report ID (101, 102, or 103).",
-        )
-    return ReportDetail(**report)
+    return ReportDetail(**_api("GET", "/api/get_report", {"report_id": report_id}))

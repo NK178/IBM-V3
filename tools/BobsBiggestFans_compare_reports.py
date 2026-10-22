@@ -1,6 +1,31 @@
 from ibm_watsonx_orchestrate.agent_builder.tools import tool, ToolPermission
+from ibm_watsonx_orchestrate.agent_builder.connections import ConnectionType
+from ibm_watsonx_orchestrate.run import connections
 from pydantic import BaseModel
 from typing import Optional
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# Report and approval state lives in the shared store behind the Render web app
+# (app.py + store.py), so the chat and the dashboard always agree.
+# The base URL comes from the key_value connection below, key "base_url".
+APP_ID = "bobs_report_api"
+
+
+def _api(method: str, path: str, params: Optional[dict] = None, body: Optional[dict] = None) -> dict:
+    base = connections.key_value(APP_ID)["base_url"].rstrip("/")
+    url = f"{base}{path}" + (f"?{urllib.parse.urlencode(params)}" if params else "")
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        # Generous timeout: a sleeping Render free instance can take ~50s to wake up.
+        with urllib.request.urlopen(req, timeout=75) as resp:
+            return json.loads(resp.read())
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise RuntimeError(f"Report service is unavailable ({e}). Try again in a minute.") from e
 
 
 class FieldDiff(BaseModel):
@@ -20,47 +45,12 @@ class ReportComparison(BaseModel):
     recommendation_variance: str
 
 
-# Inline mock store — kept in sync with BobsBiggestFans_get_report.py
-_MOCK_REPORTS: dict[int, dict] = {
-    101: {
-        "report_id": 101,
-        "title": "Q3 System Performance Audit",
-        "date": "2026-09-15",
-        "status": "Pending Review",
-        "summary": "CPU utilization averaged 68%, memory peak at 82%, zero unauthorized access attempts detected.",
-        "recommendation": "Upgrade server pool B prior to Q4 traffic spikes.",
-    },
-    102: {
-        "report_id": 102,
-        "title": "Q4 System Performance Audit",
-        "date": "2026-10-15",
-        "status": "Pending Review",
-        "summary": "CPU utilization averaged 84%, memory peak at 94%, 2 minor latency warnings detected.",
-        "recommendation": "Immediate scaling of server pool B required.",
-    },
-    103: {
-        "report_id": 103,
-        "title": "Annual Security Compliance Review",
-        "date": "2026-10-01",
-        "status": "Approved",
-        "summary": "Fully compliant with ISO/IEC 27001 standards.",
-        "recommendation": "Maintain current access control policies.",
-    },
-}
-
-
-def _compare_field(field: str, val_a: str, val_b: str) -> FieldDiff:
-    return FieldDiff(
-        field=field,
-        report_a_value=val_a,
-        report_b_value=val_b,
-        differs=(val_a != val_b),
-    )
-
-
-@tool(permission=ToolPermission.READ_ONLY)
+@tool(
+    permission=ToolPermission.READ_ONLY,
+    expected_credentials=[{"app_id": APP_ID, "type": ConnectionType.KEY_VALUE}],
+)
 def BobsBiggestFans_compare_reports(report_id_a: int, report_id_b: int) -> ReportComparison:
-    """Compare two system reports side by side, highlighting key differences in metrics and recommendations.
+    """Compare two system reports side by side and highlight field-level differences.
 
     Args:
         report_id_a (int): The numeric ID of the first report to compare (e.g. 101).
@@ -68,52 +58,5 @@ def BobsBiggestFans_compare_reports(report_id_a: int, report_id_b: int) -> Repor
     Returns:
         ReportComparison: A structured side-by-side comparison with field-level diffs, key takeaways, and recommendation variance.
     """
-    def _not_found(rid: int) -> dict:
-        return {
-            "report_id": rid,
-            "title": f"Report {rid} Not Found",
-            "date": "N/A",
-            "status": "Not Found",
-            "summary": f"No report with ID {rid} exists.",
-            "recommendation": "N/A",
-        }
-
-    a = _MOCK_REPORTS.get(report_id_a) or _not_found(report_id_a)
-    b = _MOCK_REPORTS.get(report_id_b) or _not_found(report_id_b)
-
-    compare_fields = ["title", "date", "status", "summary", "recommendation"]
-    diffs: list[FieldDiff] = [
-        _compare_field(f.replace("_", " ").title(), str(a[f]), str(b[f]))
-        for f in compare_fields
-    ]
-
-    # Build key takeaways from fields that actually differ
-    takeaways: list[str] = []
-    for d in diffs:
-        if d.differs:
-            takeaways.append(
-                f"• **{d.field}** changed from \"{d.report_a_value}\" → \"{d.report_b_value}\"."
-            )
-
-    if not takeaways:
-        takeaways = ["Both reports are identical across all compared fields."]
-
-    # Recommendation variance summary
-    if a["recommendation"] == b["recommendation"]:
-        rec_variance = "Both reports share the same recommendation."
-    else:
-        rec_variance = (
-            f"Report {report_id_a} recommends: \"{a['recommendation']}\" — "
-            f"Report {report_id_b} recommends: \"{b['recommendation']}\". "
-            "These recommendations differ and may reflect escalating system conditions."
-        )
-
-    return ReportComparison(
-        report_a_id=report_id_a,
-        report_b_id=report_id_b,
-        report_a_title=a["title"],
-        report_b_title=b["title"],
-        field_differences=diffs,
-        key_takeaways=takeaways,
-        recommendation_variance=rec_variance,
-    )
+    return ReportComparison(**_api("GET", "/api/compare_reports",
+                                   {"report_id_a": report_id_a, "report_id_b": report_id_b}))

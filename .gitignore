@@ -1,0 +1,9 @@
+# local state + build artefacts
+data.db
+data.db-*
+__pycache__/
+node_modules/
+venv/
+.env
+*.key
+*.key.pub
