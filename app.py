@@ -138,6 +138,7 @@ def update_report_status():
 
     decision = str(data.get("decision", "")).strip().title()
     reason = data.get("reason") or None
+    decided_by = str(data.get("decided_by") or "Executive").strip()[:80]
     timestamp = _now()
 
     if decision not in {"Accept", "Decline"}:
@@ -155,6 +156,7 @@ def update_report_status():
         })
 
     report, previous_status = result
+    store.log_decision(report["title"], new_status, decided_by, timestamp, reason, report_id=report_id)
     if decision == "Accept":
         msg = f"Report {report_id} has been accepted. Status updated from \"{previous_status}\" to \"{new_status}\" at {timestamp}."
     else:
@@ -166,6 +168,7 @@ def update_report_status():
         "previous_status": previous_status, "new_status": new_status,
         "decision": decision, "reason": reason,
         "timestamp_utc": timestamp, "confirmation_message": msg,
+        "memo_url": _memo_url(report["title"]) if decision == "Accept" else None,
     })
 
 
@@ -531,7 +534,19 @@ def _record(report_title, decision, decided_by, timestamp, notes, next_steps, me
         "timestamp_utc": timestamp, "notes": notes, "next_steps": next_steps,
         "confirmation_message": message,
         "dual_signature_complete": complete, "pending_cosignatory": pending,
+        "memo_url": _memo_url(report_title) if decision == "Approved" else None,
     })
+
+
+# Keep a matching system report's status in step with approval decisions.
+_STATUS_FOR_DECISION = {"Approved": "Approved", "Rejected": "Declined", "Revision Requested": "Pending Review"}
+
+
+def _log_final(report_title, decision, decided_by, timestamp, notes):
+    store.log_decision(report_title, decision, decided_by, timestamp, notes)
+    match = store.find_report_by_title(report_title)
+    if match and decision in _STATUS_FOR_DECISION:
+        store.set_report_status(match["report_id"], _STATUS_FOR_DECISION[decision])
 
 
 @app.route("/api/pending_signatures", methods=["GET"])
@@ -579,6 +594,7 @@ def record_approval_decision():
 
         if pending is None:
             store.add_pending_signature(report_title, decided_by, role, timestamp, notes)
+            store.log_decision(report_title, "First Signature", decided_by, timestamp, notes)
             awaiting = next(r for r in _DUAL_SIG_ROLES if r != role)
             return _record(
                 report_title, "Pending Second Signature", decided_by, timestamp, notes,
@@ -606,6 +622,8 @@ def record_approval_decision():
         first_signer, first_ts = pending["first_signer"], pending["first_timestamp"]
         store.complete_dual_signature(report_title, f"{first_signer} + {decided_by}", timestamp)
         combined_notes = "; ".join(filter(None, [pending.get("notes"), notes])) or None
+        store.log_decision(report_title, "Countersignature", decided_by, timestamp, notes)
+        _log_final(report_title, "Approved", f"{first_signer} + {decided_by}", timestamp, combined_notes)
         return _record(
             report_title, "Approved", f"{first_signer} + {decided_by}", timestamp, combined_notes,
             [f"First signature: **{first_signer}** at {first_ts}.",
@@ -638,11 +656,56 @@ def record_approval_decision():
             "The report owner has been notified and must resubmit within 3 business days."
         ),
     }
+    _log_final(report_title, decision, decided_by, timestamp, notes)
     return _record(
         report_title, decision, decided_by, timestamp, notes,
         _NEXT_STEPS[decision], messages[decision],
         complete=(decision == "Approved"),
     )
+
+
+
+# ---------------------------------------------------------------------------
+# Decision memos (PDF export)
+# ---------------------------------------------------------------------------
+from urllib.parse import quote as _quote
+from flask import send_file
+import io
+import memo_pdf
+
+
+def _memo_url(report_title: str) -> str:
+    return f"/api/memo.pdf?title={_quote(report_title)}"
+
+
+@app.route("/api/approved", methods=["GET"])
+def approved():
+    """Approved / accepted reports that have a downloadable decision memo."""
+    items = store.list_approved()
+    for it in items:
+        it["memo_url"] = _memo_url(it["report_title"])
+    return jsonify(items)
+
+
+@app.route("/api/memo.pdf", methods=["GET"])
+def decision_memo():
+    title = (request.args.get("title") or "").strip()
+    if not title and request.args.get("report_id"):
+        rep = store.get_report(int(request.args["report_id"])) if request.args["report_id"].isdigit() else None
+        title = rep["title"] if rep else ""
+    approval = next((a for a in store.list_approved() if a["report_key"] == store.report_key(title)), None)
+    if not title or approval is None:
+        return jsonify({"error": "No approved decision found for that report."}), 404
+
+    pdf = memo_pdf.build_memo(
+        approval=approval,
+        report=store.get_report(approval["report_id"]) if approval.get("report_id") else None,
+        history=store.decision_history(approval["report_title"]),
+        next_steps=_NEXT_STEPS["Approved"],
+        generated_at=_now(),
+    )
+    filename = "Decision-Memo-" + "".join(ch if ch.isalnum() else "-" for ch in approval["report_title"]).strip("-") + ".pdf"
+    return send_file(io.BytesIO(pdf), mimetype="application/pdf", as_attachment=True, download_name=filename)
 
 
 if __name__ == "__main__":

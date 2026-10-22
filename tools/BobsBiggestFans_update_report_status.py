@@ -28,6 +28,13 @@ def _api(method: str, path: str, params: Optional[dict] = None, body: Optional[d
         raise RuntimeError(f"Report service is unavailable ({e}). Try again in a minute.") from e
 
 
+def _absolute(url: Optional[str]) -> Optional[str]:
+    """Turn the API's relative memo link into a full URL the user can click."""
+    if not url:
+        return None
+    return connections.key_value(APP_ID)["base_url"].rstrip("/") + url
+
+
 class ReportStatusUpdate(BaseModel):
     report_id: int
     report_title: str
@@ -37,6 +44,7 @@ class ReportStatusUpdate(BaseModel):
     reason: Optional[str]
     timestamp_utc: str
     confirmation_message: str
+    memo_url: Optional[str] = None  # PDF decision memo link (set when a report is accepted)
 
 
 @tool(
@@ -47,6 +55,7 @@ def BobsBiggestFans_update_report_status(
     report_id: int,
     decision: str,
     reason: Optional[str] = None,
+    decided_by: Optional[str] = None,
 ) -> ReportStatusUpdate:
     """Accept or decline a system report, updating its status and returning a confirmation.
 
@@ -54,8 +63,11 @@ def BobsBiggestFans_update_report_status(
         report_id (int): The numeric ID of the report to act on (e.g. 101, 102, 103).
         decision (str): The action to take. Must be either 'Accept' or 'Decline'.
         reason (Optional[str]): Optional reason or note when declining a report.
+        decided_by (Optional[str]): Who made the decision (e.g. 'Boss', 'CFO'); recorded in the decision memo.
     Returns:
         ReportStatusUpdate: Confirmation record showing the previous status, new status, decision, and a confirmation message.
     """
-    return ReportStatusUpdate(**_api("POST", "/api/update_report_status",
-                                     body={"report_id": report_id, "decision": decision, "reason": reason}))
+    result = _api("POST", "/api/update_report_status",
+                  body={"report_id": report_id, "decision": decision, "reason": reason, "decided_by": decided_by})
+    result["memo_url"] = _absolute(result.get("memo_url"))
+    return ReportStatusUpdate(**result)

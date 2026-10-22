@@ -123,9 +123,10 @@ function renderReportCard(r) {
         <div class="field-label">Recommendation</div>
         <div class="field-value">${escHtml(r.recommendation)}</div>
       </div>
-      <div style="margin-top:1.1rem;display:flex;gap:0.6rem;">
+      <div style="margin-top:1.1rem;display:flex;gap:0.6rem;flex-wrap:wrap;">
         <button class="btn-success" onclick="quickDecisionById(${r.report_id},'Accept')">&#10003; Accept Report</button>
         <button class="btn-danger"  onclick="quickDecisionById(${r.report_id},'Decline')">&#10007; Decline Report</button>
+        ${memoLink(/^(approved|accepted)$/i.test(r.status) ? `/api/memo.pdf?report_id=${r.report_id}` : null)}
       </div>
     </div>`;
 }
@@ -339,6 +340,7 @@ function renderApprovalConfirm(r) {
       <div style="color:var(--muted);font-size:12px;margin-bottom:.75rem;">Recorded: ${escHtml(r.timestamp_utc)}${r.notes ? ' | Notes: ' + escHtml(r.notes) : ''}</div>
       <div class="field-label" style="margin-bottom:.4rem;">Next Steps</div>
       <ul class="next-steps-list">${steps}</ul>
+      ${r.memo_url ? `<div style="margin-top:.9rem;">${memoLink(r.memo_url)}</div>` : ''}
     </div>`;
 }
 
@@ -360,7 +362,8 @@ async function _postDecision(reportId, dec, reason, out, append = false) {
     const res = await fetch('/api/update_report_status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ report_id: parseInt(reportId), decision: dec, reason: reason }),
+      body: JSON.stringify({ report_id: parseInt(reportId), decision: dec, reason: reason,
+                             decided_by: window.currentRole ? window.currentRole() : 'Executive' }),
     });
     const r = await res.json();
     const cls = dec === 'Accept' ? 'confirm-accept' : 'confirm-decline';
@@ -370,6 +373,7 @@ async function _postDecision(reportId, dec, reason, out, append = false) {
         <div style="color:var(--muted);font-size:12px;">
           ${escHtml(r.report_title)} | ${escHtml(r.previous_status)} → <strong>${escHtml(r.new_status)}</strong> at ${escHtml(r.timestamp_utc)}
         </div>
+        ${r.memo_url ? `<div style="margin-top:.75rem;">${memoLink(r.memo_url)}</div>` : ''}
       </div>`;
     if (append) {
       out.innerHTML = html + out.innerHTML;
@@ -392,6 +396,12 @@ async function _postDecision(reportId, dec, reason, out, append = false) {
   } catch (e) {
     out.innerHTML = `<p class="placeholder">Error: ${e.message}</p>`;
   }
+}
+
+/* ── Decision memo download link ── */
+function memoLink(url) {
+  if (!url) return '';
+  return `<a class="btn-memo" href="${escHtml(url)}" download>&#128196; Download decision memo (PDF)</a>`;
 }
 
 /* ── XSS Guard ── */

@@ -28,6 +28,13 @@ def _api(method: str, path: str, params: Optional[dict] = None, body: Optional[d
         raise RuntimeError(f"Report service is unavailable ({e}). Try again in a minute.") from e
 
 
+def _absolute(url: Optional[str]) -> Optional[str]:
+    """Turn the API's relative memo link into a full URL the user can click."""
+    if not url:
+        return None
+    return connections.key_value(APP_ID)["base_url"].rstrip("/") + url
+
+
 class ApprovalRecord(BaseModel):
     report_title: str
     decision: str           # "Approved" | "Rejected" | "Revision Requested" | "Pending Second Signature" | "Signature Not Accepted"
@@ -38,6 +45,7 @@ class ApprovalRecord(BaseModel):
     confirmation_message: str
     dual_signature_complete: bool       # True only when both CFO + VP have signed
     pending_cosignatory: Optional[str]  # The role still required when dual-sig is pending
+    memo_url: Optional[str] = None      # PDF decision memo link (set once the decision is Approved)
 
 
 @tool(
@@ -74,10 +82,12 @@ def BobsBiggestFans_record_approval_decision(
         ApprovalRecord: A structured record of the decision including timestamp, dual-signature
             state, next steps, and a confirmation message.
     """
-    return ApprovalRecord(**_api("POST", "/api/record_approval_decision", body={
+    result = _api("POST", "/api/record_approval_decision", body={
         "report_title": report_title,
         "decision": decision,
         "decided_by": decided_by,
         "notes": notes,
         "requires_dual_signature": requires_dual_signature,
-    }))
+    })
+    result["memo_url"] = _absolute(result.get("memo_url"))
+    return ApprovalRecord(**result)

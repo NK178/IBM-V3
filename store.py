@@ -78,6 +78,18 @@ def init_db() -> None:
                    signers TEXT NOT NULL,
                    completed_timestamp TEXT NOT NULL)"""
         )
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS decisions (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   report_key TEXT NOT NULL,
+                   report_id INTEGER,
+                   report_title TEXT NOT NULL,
+                   decision TEXT NOT NULL,
+                   decided_by TEXT NOT NULL,
+                   notes TEXT,
+                   timestamp TEXT NOT NULL)"""
+        )
+        c.execute("CREATE INDEX IF NOT EXISTS decisions_by_key ON decisions(report_key, id)")
         c.executemany(
             "INSERT OR IGNORE INTO reports VALUES (:report_id, :title, :date, :status, :summary, :recommendation)",
             SEED_REPORTS,
@@ -115,6 +127,7 @@ def reset() -> None:
         c.execute("DELETE FROM reports")
         c.execute("DELETE FROM pending_dual_sig")
         c.execute("DELETE FROM completed_dual_sig")
+        c.execute("DELETE FROM decisions")
     init_db()
 
 
@@ -163,6 +176,68 @@ def complete_dual_signature(report_title: str, signers: str, timestamp: str) -> 
 def list_completed_signatures() -> list[dict]:
     with _db() as c:
         return [dict(r) for r in c.execute("SELECT * FROM completed_dual_sig ORDER BY completed_timestamp")]
+
+
+
+# ------------------------------------------------------------ decision log
+# Every Accept / Decline / Approve / signature is logged here, so decision memos
+# (PDF export) can show who decided what and when.
+APPROVED_DECISIONS = ("Approved", "Accepted")
+
+
+def report_key(report_title: str) -> str:
+    return _key(report_title)
+
+
+def find_report_by_title(report_title: str) -> dict | None:
+    with _db() as c:
+        for row in c.execute("SELECT * FROM reports"):
+            if _key(row["title"]) == _key(report_title):
+                return dict(row)
+    return None
+
+
+def log_decision(report_title: str, decision: str, decided_by: str, timestamp: str,
+                 notes: str | None = None, report_id: int | None = None) -> None:
+    if report_id is None:
+        match = find_report_by_title(report_title)
+        report_id = match["report_id"] if match else None
+    with _db() as c:
+        c.execute(
+            "INSERT INTO decisions (report_key, report_id, report_title, decision, decided_by, notes, timestamp)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (_key(report_title), report_id, report_title, decision, decided_by, notes, timestamp),
+        )
+
+
+def decision_history(report_title: str) -> list[dict]:
+    with _db() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM decisions WHERE report_key = ? ORDER BY id", (_key(report_title),))]
+
+
+def list_approved() -> list[dict]:
+    """Everything whose latest final decision is an approval, plus seeded reports already 'Approved'.
+
+    Signature legs ('First Signature') are not final decisions and are skipped when finding the latest.
+    """
+    finals = ("Approved", "Accepted", "Rejected", "Declined", "Revision Requested")
+    with _db() as c:
+        rows = [dict(r) for r in c.execute(
+            f"""SELECT d.* FROM decisions d
+                JOIN (SELECT report_key, MAX(id) AS id FROM decisions
+                      WHERE decision IN ({','.join('?' * len(finals))}) GROUP BY report_key) last
+                  ON d.id = last.id""", finals)]
+        approved = [r for r in rows if r["decision"] in APPROVED_DECISIONS]
+        logged = {r["report_key"] for r in rows}
+        # Seed reports that start out approved and were never re-decided in the app.
+        for rep in c.execute("SELECT * FROM reports WHERE status IN ('Approved', 'Accepted')"):
+            if _key(rep["title"]) not in logged:
+                approved.append({"report_key": _key(rep["title"]), "report_id": rep["report_id"],
+                                 "report_title": rep["title"], "decision": rep["status"],
+                                 "decided_by": "approver on file", "notes": None,
+                                 "timestamp": rep["date"]})
+    return sorted(approved, key=lambda r: r["timestamp"], reverse=True)
 
 
 init_db()

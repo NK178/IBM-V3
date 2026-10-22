@@ -39,6 +39,7 @@
     refreshTimer = setTimeout(() => {
       if (typeof loadDashboardStats === 'function') loadDashboardStats();
       refreshQueue();
+      refreshMemos();
       document.dispatchEvent(new CustomEvent('datachange'));
     }, 600);
   }
@@ -92,7 +93,31 @@
     box.replaceChildren(...items.map(renderQueueItem));
   }
 
+  /* ── Decision memos (approved reports → PDF) ──────────────────────────── */
+  async function refreshMemos() {
+    const box = document.getElementById('memo-list');
+    if (!box) return;
+    let items;
+    try { items = await getJSON('/api/approved'); }
+    catch (e) { box.innerHTML = `<p class="placeholder">Could not load memos (${escHtml(e.message)}).</p>`; return; }
+    if (!items.length) {
+      box.innerHTML = '<p class="queue-empty">No approved reports yet. Memos appear here once something is approved.</p>';
+      return;
+    }
+    box.innerHTML = items.map(a => `
+      <div class="queue-item queue-approved">
+        <div class="queue-text">
+          <div class="queue-title">${a.report_id ? `Report #${a.report_id} — ` : ''}${escHtml(a.report_title)}</div>
+          <div class="queue-sub">${escHtml(a.decision)} by ${escHtml(a.decided_by)} · ${escHtml(fmtWhen(a.timestamp))}</div>
+        </div>
+        <div class="queue-actions">${memoLink(a.memo_url)}</div>
+      </div>`).join('');
+  }
+
   function fmtWhen(iso) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {   // date only — don't invent a time
+      return new Date(iso + 'T00:00:00').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+    }
     const d = new Date(iso);
     return isNaN(d) ? iso : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
@@ -137,7 +162,7 @@
   }
 
   async function reviewReport(id, decision, reason = null) {
-    const r = await postJSON('/api/update_report_status', { report_id: id, decision, reason });
+    const r = await postJSON('/api/update_report_status', { report_id: id, decision, reason, decided_by: role });
     if (typeof auditRecord === 'function') {
       auditRecord(String(id), decision === 'Accept' ? 'decision' : 'declined',
         { detail: `${decision}ed — ${r.report_title}`, reason });
@@ -269,6 +294,7 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleChat(false); });
 
     refreshQueue();
+    refreshMemos();
     // Pick up changes made by other people (e.g. the CFO signing on another laptop).
     setInterval(() => { if (!document.hidden) dataChanged(); }, POLL_MS);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) dataChanged(); });
