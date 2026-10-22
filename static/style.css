@@ -563,6 +563,118 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 .takeaway-item { font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--border); }
 .takeaway-item:last-child { border-bottom: none; }
 
+/* ── File Upload ── */
+.upload-badge {
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(79,142,247,0.12);
+  color: var(--accent);
+  border: 1px solid rgba(79,142,247,0.3);
+  border-radius: 20px;
+  padding: 1px 8px;
+  vertical-align: middle;
+  margin-left: 6px;
+  letter-spacing: 0.3px;
+}
+
+.upload-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 2rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  background: transparent;
+  user-select: none;
+}
+
+.upload-zone:hover,
+.upload-zone.drag-over {
+  border-color: var(--accent);
+  background: rgba(79,142,247,0.05);
+}
+
+.upload-zone.has-file {
+  border-color: var(--success);
+  background: rgba(34,197,94,0.04);
+}
+
+.upload-zone-icon {
+  font-size: 32px;
+  margin-bottom: 0.5rem;
+  opacity: 0.6;
+}
+
+.upload-zone-text {
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 0.35rem;
+}
+
+.upload-zone-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.upload-zone-hint code {
+  background: var(--surface-2);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 11.5px;
+  color: var(--accent);
+}
+
+.upload-filename {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--success);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.upload-filename::before {
+  content: '✓';
+  font-weight: 700;
+}
+
+.upload-warnings {
+  margin-top: 0.75rem;
+  background: rgba(245,158,11,0.08);
+  border: 1px solid rgba(245,158,11,0.3);
+  border-radius: 7px;
+  padding: 0.75rem 1rem;
+  font-size: 12.5px;
+  color: var(--warning);
+}
+
+.upload-warnings.hidden { display: none; }
+
+.upload-error {
+  margin-top: 0.75rem;
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.3);
+  border-radius: 7px;
+  padding: 0.75rem 1rem;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.upload-preview {
+  margin-top: 1rem;
+  overflow-x: auto;
+}
+
+.upload-preview.hidden { display: none; }
+
+.upload-preview-title {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
 /* ── Audit Trail Timeline ── */
 .audit-output-area {
   min-height: 120px;

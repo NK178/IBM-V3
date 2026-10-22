@@ -1,5 +1,7 @@
 from flask import Flask, request, jsonify, render_template
 from datetime import datetime, timezone
+import csv
+import io
 import json
 
 import store
@@ -177,6 +179,195 @@ def reset():
         return jsonify({"error": "Forbidden"}), 403
     store.reset()
     return jsonify({"ok": True, "reports": store.list_reports()})
+
+# ---------------------------------------------------------------------------
+# File upload parser
+# ---------------------------------------------------------------------------
+
+# Flexible column aliases  →  canonical name
+_COL_ALIASES = {
+    # category
+    "category":        "category",
+    "line item":       "category",
+    "line_item":       "category",
+    "description":     "category",
+    "account":         "category",
+    "item":            "category",
+    "name":            "category",
+    # budgeted
+    "budgeted":        "budgeted",
+    "budgeted_usd":    "budgeted",
+    "budget":          "budgeted",
+    "budget usd":      "budgeted",
+    "budget ($)":      "budgeted",
+    "planned":         "budgeted",
+    "planned_usd":     "budgeted",
+    "forecast":        "budgeted",
+    # actual
+    "actual":          "actual",
+    "actual_usd":      "actual",
+    "actual usd":      "actual",
+    "actual ($)":      "actual",
+    "spend":           "actual",
+    "spent":           "actual",
+    "cost":            "actual",
+    "costs":           "actual",
+    "amount":          "actual",
+}
+
+
+def _parse_number(v: str) -> float:
+    """Strip currency symbols, commas, whitespace and cast to float."""
+    cleaned = str(v).replace("$", "").replace(",", "").replace(" ", "").strip()
+    if cleaned in ("", "-", "—", "n/a"):
+        return 0.0
+    return float(cleaned)
+
+
+def _rows_to_line_items(rows: list[dict]) -> tuple[list[dict], list[str]]:
+    """
+    Map a list of raw dicts (one per CSV/sheet row) to line_items.
+    Returns (line_items, warnings).
+    Skips blank rows and sub-total rows (where category looks like total/subtotal).
+    """
+    SKIP_WORDS = {"total", "subtotal", "sub-total", "grand total", "sum", ""}
+    line_items = []
+    warnings = []
+
+    for i, row in enumerate(rows, start=2):   # 1-based + header = row 2
+        cat_raw = str(row.get("category", "")).strip()
+        if cat_raw.lower() in SKIP_WORDS:
+            continue
+
+        try:
+            budgeted = _parse_number(row.get("budgeted", 0))
+            actual   = _parse_number(row.get("actual",   0))
+        except ValueError as exc:
+            warnings.append(f"Row {i}: skipped — {exc}")
+            continue
+
+        if budgeted == 0 and actual == 0:
+            continue
+
+        variance     = round(actual - budgeted, 2)
+        variance_pct = round((variance / budgeted) * 100, 2) if budgeted else 0.0
+
+        if variance_pct > 5:
+            status = "Over Budget"
+        elif variance_pct < -5:
+            status = "Under Budget"
+        else:
+            status = "On Track"
+
+        line_items.append({
+            "category":     cat_raw,
+            "budgeted_usd": budgeted,
+            "actual_usd":   actual,
+            "variance_usd": variance,
+            "variance_pct": variance_pct,
+            "status":       status,
+        })
+
+    return line_items, warnings
+
+
+def _normalise_headers(raw_headers: list[str]) -> dict[int, str]:
+    """Return {col_index: canonical_name} for recognised columns."""
+    mapping = {}
+    for idx, h in enumerate(raw_headers):
+        canonical = _COL_ALIASES.get(h.strip().lower())
+        if canonical:
+            mapping[idx] = canonical
+    return mapping
+
+
+def _parse_csv_bytes(data: bytes) -> tuple[list[dict], list[str]]:
+    text = data.decode("utf-8-sig", errors="replace")
+    reader = csv.reader(io.StringIO(text))
+    all_rows = list(reader)
+    if not all_rows:
+        return [], ["File appears to be empty."]
+
+    raw_headers = all_rows[0]
+    col_map = _normalise_headers(raw_headers)
+    if "category" not in col_map.values() or "budgeted" not in col_map.values() or "actual" not in col_map.values():
+        missing = [c for c in ("category", "budgeted", "actual") if c not in col_map.values()]
+        return [], [f"Could not find required columns: {', '.join(missing)}. "
+                    f"Headers found: {', '.join(raw_headers)}"]
+
+    rows = []
+    for raw in all_rows[1:]:
+        row = {}
+        for idx, canonical in col_map.items():
+            row[canonical] = raw[idx] if idx < len(raw) else ""
+        rows.append(row)
+
+    return _rows_to_line_items(rows)
+
+
+def _parse_xlsx_bytes(data: bytes) -> tuple[list[dict], list[str]]:
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    ws = wb.active
+    all_rows = [[str(c.value) if c.value is not None else "" for c in row] for row in ws.iter_rows()]
+    wb.close()
+
+    if not all_rows:
+        return [], ["Workbook sheet appears to be empty."]
+
+    raw_headers = all_rows[0]
+    col_map = _normalise_headers(raw_headers)
+    if "category" not in col_map.values() or "budgeted" not in col_map.values() or "actual" not in col_map.values():
+        missing = [c for c in ("category", "budgeted", "actual") if c not in col_map.values()]
+        return [], [f"Could not find required columns: {', '.join(missing)}. "
+                    f"Headers found: {', '.join(raw_headers)}"]
+
+    rows = []
+    for raw in all_rows[1:]:
+        row = {}
+        for idx, canonical in col_map.items():
+            row[canonical] = raw[idx] if idx < len(raw) else ""
+        rows.append(row)
+
+    return _rows_to_line_items(rows)
+
+
+@app.route("/api/parse_upload", methods=["POST"])
+def parse_upload():
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "No file attached."}), 400
+
+    filename = (f.filename or "").lower()
+    data = f.read()
+
+    if filename.endswith(".csv"):
+        line_items, warnings = _parse_csv_bytes(data)
+    elif filename.endswith((".xlsx", ".xls")):
+        if filename.endswith(".xls"):
+            return jsonify({"error": "Legacy .xls format is not supported. Please save as .xlsx or .csv."}), 415
+        line_items, warnings = _parse_xlsx_bytes(data)
+    else:
+        return jsonify({"error": "Unsupported file type. Please upload a .csv or .xlsx file."}), 415
+
+    if not line_items and warnings:
+        return jsonify({"error": warnings[0], "warnings": warnings}), 422
+
+    total_budgeted = sum(li["budgeted_usd"] for li in line_items)
+    total_actual   = sum(li["actual_usd"]   for li in line_items)
+    total_variance = round(total_actual - total_budgeted, 2)
+    total_variance_pct = round((total_variance / total_budgeted) * 100, 2) if total_budgeted else 0.0
+
+    return jsonify({
+        "line_items":          line_items,
+        "total_budgeted_usd":  total_budgeted,
+        "total_actual_usd":    total_actual,
+        "total_variance_usd":  total_variance,
+        "total_variance_pct":  total_variance_pct,
+        "warnings":            warnings,
+        "row_count":           len(line_items),
+    })
+
 
 @app.route("/api/generate_sample_report", methods=["GET"])
 def generate_sample_report():

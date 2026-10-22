@@ -143,9 +143,51 @@
 
     <!-- ── FINANCIAL ANALYSIS VIEW ── -->
     <section id="view-financial" class="view">
+
+      <!-- Upload a real report -->
+      <div class="panel" style="margin-bottom:1.5rem;">
+        <div class="panel-header">
+          <h3>Upload Report <span class="upload-badge">CSV / XLSX</span></h3>
+        </div>
+
+        <!-- Drop zone -->
+        <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+          <div class="upload-zone-icon">&#128196;</div>
+          <div class="upload-zone-text">Drop a <strong>.csv</strong> or <strong>.xlsx</strong> file here, or click to browse</div>
+          <div class="upload-zone-hint">
+            Required columns: <code>category</code>, <code>budgeted</code>, <code>actual</code>
+            &nbsp;·&nbsp; Aliases accepted: budget, planned, spend, description, account&hellip;
+          </div>
+          <input type="file" id="file-input" accept=".csv,.xlsx" style="display:none"
+                 onchange="handleFileSelect(this.files[0])" />
+        </div>
+
+        <!-- Chosen file + report title row -->
+        <div class="upload-meta hidden" id="upload-meta">
+          <div class="controls-row" style="margin-top:0.85rem;">
+            <span class="upload-filename" id="upload-filename"></span>
+            <label style="margin-left:auto;">Report Title:</label>
+            <input type="text" id="upload-title" placeholder="e.g. Q3 Marketing Budget" style="width:220px;" />
+            <label>Department:</label>
+            <input type="text" id="upload-dept" placeholder="Corporate" style="width:120px;" />
+            <button class="btn-primary" id="upload-analyze-btn" onclick="analyzeUploadedReport()">
+              Analyze Report
+            </button>
+            <button class="btn-danger" onclick="resetUpload()" style="padding:0.45rem 0.75rem;">&#10005;</button>
+          </div>
+        </div>
+
+        <!-- Parse warnings -->
+        <div class="upload-warnings hidden" id="upload-warnings"></div>
+
+        <!-- Preview table -->
+        <div class="upload-preview hidden" id="upload-preview"></div>
+      </div>
+
+      <!-- Generate from template (unchanged) -->
       <div class="panel">
         <div class="panel-header">
-          <h3>Financial Analysis</h3>
+          <h3>Generate Sample Report</h3>
           <div class="controls-row">
             <label>Report Type:</label>
             <select id="report-type-select">
@@ -159,7 +201,7 @@
           </div>
         </div>
         <div id="financial-output" class="output-area">
-          <p class="placeholder">Select a report type and click Generate &amp; Analyze.</p>
+          <p class="placeholder">Upload a file above, or select a report type and click Generate &amp; Analyze.</p>
         </div>
       </div>
     </section>

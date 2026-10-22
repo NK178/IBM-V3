@@ -524,6 +524,347 @@ function clearAuditTrail() {
   showToast('Audit trail cleared.', 'success');
 }
 
+/* ── File Upload ── */
+
+/** Parsed line-items held between parse and analyze steps */
+let _uploadedParsed = null;   // { line_items, total_budgeted_usd, total_actual_usd, ... }
+
+// ── Drag-and-drop wiring ──
+(function () {
+  const zone = document.getElementById('upload-zone');
+  if (!zone) return;
+
+  zone.addEventListener('dragover', e => {
+    e.preventDefault();
+    zone.classList.add('drag-over');
+  });
+  ['dragleave', 'dragend'].forEach(ev =>
+    zone.addEventListener(ev, () => zone.classList.remove('drag-over'))
+  );
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    const file = e.dataTransfer?.files?.[0];
+    if (file) handleFileSelect(file);
+  });
+})();
+
+/** Entry point: called by <input onchange> and drag-drop */
+async function handleFileSelect(file) {
+  if (!file) return;
+
+  _setUploadError(null);
+  _uploadedParsed = null;
+
+  const name = file.name.toLowerCase();
+  if (!name.endsWith('.csv') && !name.endsWith('.xlsx')) {
+    _setUploadError('Unsupported file type. Please upload a .csv or .xlsx file.');
+    return;
+  }
+
+  const zone = document.getElementById('upload-zone');
+  zone.classList.add('has-file');
+
+  // Show the meta bar immediately with the filename
+  document.getElementById('upload-filename').textContent = file.name;
+  document.getElementById('upload-meta').classList.remove('hidden');
+  // Pre-fill title from filename (strip extension)
+  const titleGuess = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+  const titleEl = document.getElementById('upload-title');
+  if (!titleEl.value) titleEl.value = titleGuess;
+
+  // Show loading state in the preview area
+  const preview = document.getElementById('upload-preview');
+  preview.classList.remove('hidden');
+  preview.innerHTML = '<div class="loading"><span class="spinner"></span>Parsing file…</div>';
+
+  try {
+    if (name.endsWith('.csv')) {
+      _uploadedParsed = await _parseCsvClient(file);
+    } else {
+      _uploadedParsed = await _parseXlsxServer(file);
+    }
+  } catch (err) {
+    _setUploadError(err.message);
+    preview.classList.add('hidden');
+    return;
+  }
+
+  _renderUploadWarnings(_uploadedParsed.warnings || []);
+  _renderPreviewTable(_uploadedParsed.line_items);
+  auditRecord('financial', 'viewed', { detail: `File uploaded: ${file.name}` });
+}
+
+/** Parse a CSV file in the browser — no server round-trip */
+async function _parseCsvClient(file) {
+  const text = await file.text();
+  const rows = _csvToRows(text);
+  if (!rows.length) throw new Error('File appears to be empty.');
+
+  const headers = rows[0].map(h => h.trim().toLowerCase());
+  const colMap  = _mapColumns(headers);
+  _assertColumns(colMap, headers);
+
+  const lineItems = [];
+  const warnings  = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const raw  = rows[i];
+    const cat  = (raw[colMap.category] || '').trim();
+    const SKIP = new Set(['total','subtotal','sub-total','grand total','sum','']);
+    if (SKIP.has(cat.toLowerCase())) continue;
+
+    let budgeted, actual;
+    try {
+      budgeted = _parseNum(raw[colMap.budgeted] ?? '');
+      actual   = _parseNum(raw[colMap.actual]   ?? '');
+    } catch {
+      warnings.push(`Row ${i + 1}: skipped — non-numeric value.`);
+      continue;
+    }
+    if (budgeted === 0 && actual === 0) continue;
+
+    const variance     = Math.round((actual - budgeted) * 100) / 100;
+    const variancePct  = budgeted ? Math.round((variance / budgeted) * 10000) / 100 : 0;
+    const status       = variancePct > 5 ? 'Over Budget' : variancePct < -5 ? 'Under Budget' : 'On Track';
+
+    lineItems.push({
+      category:     cat,
+      budgeted_usd: budgeted,
+      actual_usd:   actual,
+      variance_usd: variance,
+      variance_pct: variancePct,
+      status,
+    });
+  }
+
+  if (!lineItems.length) throw new Error('No valid data rows found. Check column headers and numeric values.');
+
+  const totalBudgeted = lineItems.reduce((s, r) => s + r.budgeted_usd, 0);
+  const totalActual   = lineItems.reduce((s, r) => s + r.actual_usd,   0);
+  const totalVariance = Math.round((totalActual - totalBudgeted) * 100) / 100;
+  const totalPct      = totalBudgeted ? Math.round((totalVariance / totalBudgeted) * 10000) / 100 : 0;
+
+  return {
+    line_items:         lineItems,
+    total_budgeted_usd: totalBudgeted,
+    total_actual_usd:   totalActual,
+    total_variance_usd: totalVariance,
+    total_variance_pct: totalPct,
+    warnings,
+  };
+}
+
+/** Upload an xlsx to the server and return normalised data */
+async function _parseXlsxServer(file) {
+  const body = new FormData();
+  body.append('file', file);
+  const res = await fetch('/api/parse_upload', { method: 'POST', body });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Server could not parse the file.');
+  return data;
+}
+
+/** Minimal RFC-4180 CSV tokenizer — handles quoted fields with embedded commas/newlines */
+function _csvToRows(text) {
+  const rows = [];
+  let row = [], field = '', inQuote = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuote) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuote = false;
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuote = true;
+    } else if (ch === ',') {
+      row.push(field); field = '';
+    } else if (ch === '\n') {
+      row.push(field); field = '';
+      if (row.some(c => c.trim())) rows.push(row);
+      row = [];
+    } else if (ch === '\r') {
+      // skip bare CR
+    } else {
+      field += ch;
+    }
+  }
+  if (field || row.length) { row.push(field); if (row.some(c => c.trim())) rows.push(row); }
+  return rows;
+}
+
+/** Map lowercased header array → { category: colIdx, budgeted: colIdx, actual: colIdx } */
+const _UPLOAD_ALIASES = {
+  category:    ['category','line item','line_item','description','account','item','name'],
+  budgeted:    ['budgeted','budgeted_usd','budget','budget usd','budget ($)','planned','planned_usd','forecast'],
+  actual:      ['actual','actual_usd','actual usd','actual ($)','spend','spent','cost','costs','amount'],
+};
+
+function _mapColumns(headers) {
+  const result = {};
+  for (const [canonical, aliases] of Object.entries(_UPLOAD_ALIASES)) {
+    for (const alias of aliases) {
+      const idx = headers.indexOf(alias);
+      if (idx !== -1) { result[canonical] = idx; break; }
+    }
+  }
+  return result;
+}
+
+function _assertColumns(colMap, headers) {
+  const missing = ['category','budgeted','actual'].filter(k => !(k in colMap));
+  if (missing.length) {
+    throw new Error(
+      `Could not find required column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. ` +
+      `Headers found: ${headers.join(', ')}`
+    );
+  }
+}
+
+/** Strip $, commas; parse float */
+function _parseNum(v) {
+  const s = String(v).replace(/[$,\s]/g, '').trim();
+  if (s === '' || s === '-' || s === '—') return 0;
+  const n = parseFloat(s);
+  if (isNaN(n)) throw new Error(`"${v}" is not a number`);
+  return Math.round(n * 100) / 100;
+}
+
+/** Render a compact preview table of parsed line items */
+function _renderPreviewTable(lineItems) {
+  const preview = document.getElementById('upload-preview');
+  const rows = lineItems.map(li => {
+    const chip = li.status === 'Over Budget'  ? 'chip-over'
+               : li.status === 'Under Budget' ? 'chip-under' : 'chip-ok';
+    return `<tr>
+      <td>${escHtml(li.category)}</td>
+      <td>${fmtUSD(li.budgeted_usd)}</td>
+      <td>${fmtUSD(li.actual_usd)}</td>
+      <td>${fmtUSD(li.variance_usd)}</td>
+      <td>${fmtPct(li.variance_pct)}</td>
+      <td><span class="chip ${chip}">${escHtml(li.status)}</span></td>
+    </tr>`;
+  }).join('');
+
+  preview.innerHTML = `
+    <div class="upload-preview-title">${lineItems.length} rows parsed — review below, then click Analyze Report</div>
+    <table>
+      <thead><tr>
+        <th>Category</th><th>Budgeted</th><th>Actual</th><th>Variance $</th><th>Variance %</th><th>Status</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function _renderUploadWarnings(warnings) {
+  const el = document.getElementById('upload-warnings');
+  if (!warnings.length) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  el.innerHTML = '⚠ ' + warnings.map(escHtml).join('<br>⚠ ');
+}
+
+function _setUploadError(msg) {
+  const zone    = document.getElementById('upload-zone');
+  const preview = document.getElementById('upload-preview');
+  const meta    = document.getElementById('upload-meta');
+  // Remove any existing error banner
+  const existing = document.getElementById('upload-error-msg');
+  if (existing) existing.remove();
+
+  if (!msg) return;
+
+  zone.classList.remove('has-file');
+  meta.classList.add('hidden');
+  preview.classList.add('hidden');
+
+  const div = document.createElement('div');
+  div.id = 'upload-error-msg';
+  div.className = 'upload-error';
+  div.textContent = msg;
+  zone.insertAdjacentElement('afterend', div);
+}
+
+/** Reset the upload zone to its initial state */
+function resetUpload() {
+  _uploadedParsed = null;
+  document.getElementById('file-input').value = '';
+  document.getElementById('upload-zone').classList.remove('has-file', 'drag-over');
+  document.getElementById('upload-meta').classList.add('hidden');
+  document.getElementById('upload-preview').classList.add('hidden');
+  document.getElementById('upload-warnings').classList.add('hidden');
+  document.getElementById('upload-title').value = '';
+  document.getElementById('upload-dept').value  = '';
+  const err = document.getElementById('upload-error-msg');
+  if (err) err.remove();
+}
+
+/** Send parsed data to analyze_financial_report and render results */
+async function analyzeUploadedReport() {
+  if (!_uploadedParsed) {
+    showToast('No file parsed yet — please upload a file first.', 'error');
+    return;
+  }
+
+  const title = document.getElementById('upload-title').value.trim() || 'Uploaded Report';
+  const dept  = document.getElementById('upload-dept').value.trim()  || 'Uploaded';
+  const out   = document.getElementById('financial-output');
+
+  // Scroll to result area
+  out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  setLoading(out);
+
+  try {
+    const res = await fetch('/api/analyze_financial_report', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        report_title:       title,
+        total_budgeted_usd: _uploadedParsed.total_budgeted_usd,
+        total_actual_usd:   _uploadedParsed.total_actual_usd,
+        line_items:         _uploadedParsed.line_items,
+      }),
+    });
+    const analysis = await res.json();
+
+    // Build a synthetic report object that renderFinancialReport understands
+    const report = {
+      report_title:        title,
+      department:          dept,
+      report_period:       'Uploaded',
+      total_budgeted_usd:  _uploadedParsed.total_budgeted_usd,
+      total_actual_usd:    _uploadedParsed.total_actual_usd,
+      total_variance_usd:  _uploadedParsed.total_variance_usd,
+      total_variance_pct:  _uploadedParsed.total_variance_pct,
+      line_items:          _uploadedParsed.line_items,
+    };
+
+    out.innerHTML = renderFinancialReport(report, analysis);
+
+    auditRecord('financial', 'generated', {
+      detail: `${title} — ${dept} | ${_uploadedParsed.line_items.length} rows | Status: ${analysis.overall_status}`,
+    });
+
+    // Update approval routing card
+    const tier = analysis.overall_status === 'Critical Overrun' ? 'dual'
+               : analysis.overall_status === 'Requires Scrutiny' ? 'standard'
+               : 'auto';
+    renderApprovalCard(tier, { id: null, title, status: 'Pending Review' });
+    if (tier !== 'auto') {
+      auditRecord('financial', 'routed', {
+        detail: `Routed as ${APPROVAL_TIERS[tier].label} — ${title}`,
+      });
+    }
+
+    showToast(`Analyzed "${title}" — ${_uploadedParsed.line_items.length} line items.`);
+  } catch (e) {
+    out.innerHTML = `<p class="placeholder">Error: ${e.message}</p>`;
+  }
+}
+
 /* ── Approval Routing Card ── */
 
 /**
