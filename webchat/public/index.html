@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report Review</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --surface: #ffffff; --border: #dfe2e6; --text: #161616; --muted: #5e6670;
+    --accent: #0f62fe; --ok: #198038; --bad: #da1e28; --warn: #8e6a00;
+    --ok-bg: #defbe6; --bad-bg: #fff1f1; --warn-bg: #fcf4d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121417; --surface: #1c1f24; --border: #2e333a; --text: #f2f4f8; --muted: #9aa3ad;
+      --accent: #78a9ff; --ok: #42be65; --bad: #ff8389; --warn: #f1c21b;
+      --ok-bg: #0e2a17; --bad-bg: #2d1215; --warn-bg: #2b2408;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; flex: 1; }
+  #toggle { display: none; }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  #chat { flex: 1; min-width: 0; position: relative; }
+  #chat-status { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); padding: 16px; text-align: center; }
+
+  aside { width: 380px; flex-shrink: 0; background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  .side-head { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+  .side-head h2 { font-size: 14px; margin: 0; flex: 1; }
+  .count { font-size: 12px; color: var(--muted); }
+  #outputs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .empty { color: var(--muted); text-align: center; padding: 32px 12px; }
+
+  .card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--bg); }
+  .card.new { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .card-top { display: flex; align-items: baseline; gap: 8px; }
+  .card h3 { font-size: 14px; margin: 0; flex: 1; }
+  .meta { font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
+  .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; background: var(--warn-bg); color: var(--warn); }
+  .badge.approved, .badge.accepted { background: var(--ok-bg); color: var(--ok); }
+  .badge.declined, .badge.rejected, .badge.not-found { background: var(--bad-bg); color: var(--bad); }
+  .card p { margin: 4px 0; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-top: 8px; }
+
+  .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
+  button.bad { background: transparent; border-color: var(--bad); color: var(--bad); }
+  label.pick { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  th, td { text-align: left; padding: 5px 4px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td.diff { color: var(--bad); font-weight: 600; }
+  ul { margin: 4px 0; padding-left: 18px; }
+
+  .inline-note { font-size: 13px; color: var(--muted); padding: 4px 0; }
+  .inline-note a { color: var(--accent); cursor: pointer; }
+
+  @media (max-width: 760px) {
+    #toggle { display: inline-block; }
+    aside { position: fixed; top: 0; right: 0; bottom: 0; width: min(92vw, 380px); z-index: 50; transform: translateX(100%); transition: transform .2s; box-shadow: -8px 0 24px rgba(0,0,0,.25); }
+    aside.open { transform: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Financial Report Review</h1>
+  <button id="toggle" aria-controls="sidebar">Outputs <span id="toggle-count"></span></button>
+</header>
+<main>
+  <div id="chat"><div id="chat-status">Connecting to the agent…</div></div>
+  <aside id="sidebar" aria-label="Outputs">
+    <div class="side-head">
+      <h2>Outputs</h2>
+      <span class="count" id="count"></span>
+      <button id="compare" disabled title="Tick two reports to compare">Compare</button>
+    </div>
+    <div id="outputs"><div class="empty">Reports and comparisons the agent produces will show up here.</div></div>
+  </aside>
+</main>
+
+<script>
+(() => {
+  let chat = null;                 // wxO chat instance
+  const reports = new Map();       // report_id -> report data
+  const comparisons = [];          // comparison payloads, newest first
+  const picked = new Set();        // report ids ticked for comparison
+
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, attrs = {}, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") n.className = v;
+      else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+      else if (v !== false && v != null) n.setAttribute(k, v === true ? "" : v);
+    }
+    for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(String(k)));
+    return n;
+  };
+  const slug = (s) => String(s || "").toLowerCase().replace(/[^a-z]+/g, "-").replace(/^-|-$/g, "");
+
+  // ---------- chat actions ----------
+  async function ask(text) {
+    if (!chat) return;
+    $("sidebar").classList.remove("open");
+    await chat.send(text);
+  }
+
+  // ---------- sidebar rendering ----------
+  function render() {
+    const box = $("outputs");
+    box.replaceChildren();
+    const total = reports.size + comparisons.length;
+    $("count").textContent = total ? `${total} item${total > 1 ? "s" : ""}` : "";
+    $("toggle-count").textContent = total ? `(${total})` : "";
+    $("compare").disabled = picked.size !== 2;
+
+    if (!total) {
+      box.append(el("div", { class: "empty" }, "Reports and comparisons the agent produces will show up here."));
+      return;
+    }
+
+    for (const c of comparisons) box.append(comparisonCard(c));
+    for (const r of [...reports.values()].sort((a, b) => b._seen - a._seen)) box.append(reportCard(r));
+  }
+
+  function reportCard(r) {
+    const pending = /pending/i.test(r.status);
+    const card = el("div", { class: "card" + (r._fresh ? " new" : ""), id: `report-${r.report_id}` },
+      el("div", { class: "card-top" },
+        el("h3", {}, `#${r.report_id} · ${r.title}`),
+        el("span", { class: `badge ${slug(r.status)}` }, r.status)),
+      el("div", { class: "meta" }, r.date),
+      el("p", {}, r.summary),
+      el("div", { class: "label" }, "Recommendation"),
+      el("p", {}, r.recommendation),
+      el("div", { class: "actions" },
+        el("button", { class: "ok", disabled: !pending, onclick: () => ask(`Accept Report ${r.report_id}`) }, "Accept"),
+        el("button", { class: "bad", disabled: !pending, onclick: () => {
+          const reason = prompt(`Reason for declining Report ${r.report_id}? (optional)`);
+          if (reason === null) return;
+          ask(`Decline Report ${r.report_id}` + (reason.trim() ? ` with the reason: ${reason.trim()}` : ""));
+        } }, "Decline"),
+        el("button", { onclick: () => ask(`Show me Report ${r.report_id}`) }, "Refresh"),
+        el("label", { class: "pick" },
+          el("input", { type: "checkbox", checked: picked.has(r.report_id), onchange: (e) => {
+            e.target.checked ? picked.add(r.report_id) : picked.delete(r.report_id);
+            if (picked.size > 2) { picked.delete([...picked][0]); }
+            render();
+          } }), "Compare")));
+    r._fresh = false;
+    return card;
+  }
+
+  function comparisonCard(c) {
+    const rows = (c.field_differences || []).map((d) =>
+      el("tr", {},
+        el("td", {}, d.field),
+        el("td", { class: d.differs ? "diff" : "" }, d.report_a_value),
+        el("td", { class: d.differs ? "diff" : "" }, d.report_b_value)));
+    const card = el("div", { class: "card" + (c._fresh ? " new" : "") },
+      el("div", { class: "card-top" },
+        el("h3", {}, `Compare #${c.report_a_id} vs #${c.report_b_id}`)),
+      el("div", { class: "meta" }, `${c.report_a_title} · ${c.report_b_title}`),
+      el("table", {},
+        el("thead", {}, el("tr", {}, el("th", {}, "Field"), el("th", {}, `#${c.report_a_id}`), el("th", {}, `#${c.report_b_id}`))),
+        el("tbody", {}, rows)),
+      (c.key_takeaways || []).length ? [el("div", { class: "label" }, "Key takeaways"), el("ul", {}, c.key_takeaways.map((t) => el("li", {}, t)))] : null,
+      c.recommendation_variance ? [el("div", { class: "label" }, "Recommendation variance"), el("p", {}, c.recommendation_variance)] : null);
+    c._fresh = false;
+    return card;
+  }
+
+  // ---------- widget intake ----------
+  // Tools return _meta["com.ibm.orchestrate/widget"].user_defined = { user_defined_type, payload }
+  function intake(data) {
+    const type = data?.user_defined_type;
+    const p = data?.payload || {};
+    const now = Date.now();
+    if (type === "report_card" && p.report_id != null) {
+      reports.set(p.report_id, { ...reports.get(p.report_id), ...p, _seen: now, _fresh: true });
+      return `Report #${p.report_id} added to Outputs`;
+    }
+    if (type === "report_comparison") {
+      comparisons.unshift({ ...p, _fresh: true });
+      return `Comparison #${p.report_a_id} vs #${p.report_b_id} added to Outputs`;
+    }
+    if (type === "report_status" && p.report_id != null) {
+      const prev = reports.get(p.report_id) || { report_id: p.report_id, title: p.report_title, date: "", summary: "", recommendation: "" };
+      reports.set(p.report_id, { ...prev, status: p.new_status, _seen: now, _fresh: true });
+      return `Report #${p.report_id} marked ${p.new_status}`;
+    }
+    return null;
+  }
+
+  function onUserDefined(event) {
+    const meta = event.message?._meta?.["com.ibm.orchestrate/widget"];
+    const data = event.contentItem?.user_defined || meta?.user_defined;
+    const note = intake(data);
+    if (!note) return;
+    render();
+    const link = el("a", { onclick: () => {
+      $("sidebar").classList.add("open");
+      document.querySelector(".card")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } }, "view →");
+    event.hostElement.replaceChildren(el("div", { class: "inline-note" }, note, " ", link));
+  }
+
+  // ---------- UI wiring ----------
+  $("toggle").addEventListener("click", () => $("sidebar").classList.toggle("open"));
+  $("compare").addEventListener("click", () => {
+    const [a, b] = [...picked].sort((x, y) => x - y);
+    picked.clear();
+    ask(`Compare Report ${a} and Report ${b}`);
+    render();
+  });
+
+  // ---------- boot the embedded chat ----------
+  async function getToken() {
+    const r = await fetch("/createJWT", { credentials: "same-origin" });
+    if (!r.ok) throw new Error("token request failed");
+    return r.text();
+  }
+
+  async function boot() {
+    try {
+      const [cfg, token] = await Promise.all([fetch("/config").then((r) => r.json()), getToken()]);
+      if (!cfg.orchestrationID || !cfg.hostURL) throw new Error("Server is missing WXO_* environment variables.");
+
+      const chatHost = $("chat");
+      window.wxOConfiguration = {
+        orchestrationID: cfg.orchestrationID,
+        hostURL: cfg.hostURL,
+        deploymentPlatform: cfg.deploymentPlatform,
+        crn: cfg.crn,
+        showLauncher: false,
+        token,
+        layout: { form: "custom", customElement: chatHost },
+        chatOptions: {
+          agentId: cfg.agentId,
+          agentEnvironmentId: cfg.agentEnvironmentId,
+          onLoad(instance) {
+            chat = instance;
+            $("chat-status").remove();
+            instance.on("userDefinedResponse", onUserDefined);
+            instance.on("authTokenNeeded", async (event) => { event.authToken = await getToken(); });
+          },
+        },
+      };
+
+      const s = document.createElement("script");
+      s.src = `${cfg.hostURL}/wxochat/wxoLoader.js?embed=true`;
+      s.onload = () => wxoLoader.init();
+      s.onerror = () => { $("chat-status").textContent = "Could not load the watsonx Orchestrate chat."; };
+      document.head.appendChild(s);
+    } catch (err) {
+      $("chat-status").textContent = `Chat failed to start: ${err.message}`;
+    }
+  }
+  boot();
+})();
+</script>
+</body>
+</html>
