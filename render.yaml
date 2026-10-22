@@ -13,7 +13,7 @@ services:
       # Embedded agent chat (dashboard "Ask Agent" drawer). Values are set in the Render dashboard.
       - key: WXO_PRIVATE_KEY
         sync: false
-      - key: IBM_PUBLIC_KEY
+      - key: IBM_PUBLIC_KEY      # optional: only needed to pass an SSO token
         sync: false
       - key: WXO_ORCHESTRATION_ID
         sync: false

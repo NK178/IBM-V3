@@ -2,7 +2,7 @@
 
 Env vars (set in Render):
   WXO_PRIVATE_KEY        your RS256 private key (PEM; multi-line, or one line with literal \\n)
-  IBM_PUBLIC_KEY         IBM's public key for your instance (PEM)
+  IBM_PUBLIC_KEY         optional — IBM's public key; only needed to pass an SSO token (user_payload)
   WXO_ORCHESTRATION_ID   from `orchestrate channels webchat embed`
   WXO_HOST_URL           "
   WXO_CRN                "
@@ -25,7 +25,7 @@ from flask import Blueprint, jsonify, make_response, request
 
 bp = Blueprint("chat_auth", __name__)
 
-_REQUIRED = ["WXO_PRIVATE_KEY", "IBM_PUBLIC_KEY", "WXO_ORCHESTRATION_ID", "WXO_HOST_URL",
+_REQUIRED = ["WXO_PRIVATE_KEY", "WXO_ORCHESTRATION_ID", "WXO_HOST_URL",
              "WXO_AGENT_ID"]
 _COOKIE = "ANONYMOUS-USER-ID"
 
@@ -71,20 +71,20 @@ def chat_token():
     user_id = request.cookies.get(_COOKIE) or f"anon-{uuid.uuid4()}"
     now = int(time.time())
     try:
-        token = jwt.encode(
-            {
-                "sub": user_id,
-                "iat": now,
-                "exp": now + int(os.environ.get("CHAT_TOKEN_TTL_SECONDS", "3600")),
-                "user_payload": _encrypt_for_ibm({"name": "Dashboard user", "custom_user_id": user_id}),
-                # Readable by the browser; keep it non-sensitive. The acting role is NOT put
-                # here: it can change mid-session, so the page sends it per message (pre:send).
-                # A JWT context value would override that, per the wxO docs.
-                "context": {"channel": "dashboard"},
-            },
-            _pem("WXO_PRIVATE_KEY"),
-            algorithm="RS256",
-        )
+        claims = {
+            "sub": user_id,
+            "iat": now,
+            "exp": now + int(os.environ.get("CHAT_TOKEN_TTL_SECONDS", "3600")),
+            # Readable by the browser; keep it non-sensitive. The acting role is NOT put
+            # here: it can change mid-session, so the page sends it per message (pre:send).
+            # A JWT context value would override that, per the wxO docs.
+            "context": {"channel": "dashboard"},
+        }
+        # user_payload (encrypted with IBM's public key) is only used to pass an SSO token for
+        # on-behalf-of flows. We don't need that, so it's sent only if an IBM key is configured.
+        if os.environ.get("IBM_PUBLIC_KEY"):
+            claims["user_payload"] = _encrypt_for_ibm({"name": "Dashboard user", "custom_user_id": user_id})
+        token = jwt.encode(claims, _pem("WXO_PRIVATE_KEY"), algorithm="RS256")
     except Exception as e:  # bad PEM, wrong key type, payload too large for key...
         return make_response(f"Could not create chat token: {e}", 500)
 
