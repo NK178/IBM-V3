@@ -6,6 +6,7 @@ $orchestrate = ".\venv\Scripts\orchestrate.exe"
 Write-Host "==> Importing tools..."
 & $orchestrate tools import -k python -f tools/BobsBiggestFans_generate_sample_report.py
 & $orchestrate tools import -k python -f tools/BobsBiggestFans_analyze_financial_report.py
+& $orchestrate tools import -k python -f tools/BobsBiggestFans_route_overrun_approval.py
 & $orchestrate tools import -k python -f tools/BobsBiggestFans_record_approval_decision.py
 & $orchestrate tools import -k python -f tools/BobsBiggestFans_get_report.py
 & $orchestrate tools import -k python -f tools/BobsBiggestFans_compare_reports.py
