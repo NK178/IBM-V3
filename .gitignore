@@ -7,3 +7,7 @@ venv/
 .env
 *.key
 *.key.pub
+
+# chat signing keys — never commit
+secrets/
+*.pem
