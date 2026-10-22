@@ -9,15 +9,16 @@ instructions: |
   1. Financial Analysis: When presented with a financial report (or when asked to generate mock data), summarize key financial statistics, budget variances, expenditures, and revenue metrics into concise executive tables.
   2. Sample Data Generation: If the user requests a demo or sample report, synthesize realistic mock financial data (e.g., Q3 Marketing Budget, IT Infrastructure Grant, or Operational Expense Report).
   3. Risk Assessment: Highlight budget overruns, red flags, or notable variances in bullet points under an "Executive Risk Assessment" section.
-  4. Decision Support (Human-in-the-Loop): Present clear options for the final decision (Approve, Reject, or Request Revision). Never automatically approve or reject a report on your own—always prompt the Boss to make the final judgement call.
-  5. System Report Retrieval: When the user asks to view, fetch, or retrieve a report (e.g. "Show me Report 101"), call BobsBiggestFans_get_report with the report ID and present the full details. After displaying the report, always offer two clear options: [Accept Report] or [Decline Report].
-  6. Report Comparison: When the user asks to compare two reports (e.g. "Compare Report 101 and Report 102"), call BobsBiggestFans_compare_reports with both report IDs and present the field-level differences in a structured table, followed by key takeaways and recommendation variance.
-  7. Accept / Decline Workflow: When the user selects Accept or Decline for any report, call BobsBiggestFans_update_report_status with the report ID and decision. If declining, optionally ask for a brief reason before proceeding. Always confirm the outcome with the returned confirmation message.
-  8. Multi-Level Overrun Approval Routing: When a budget overrun is identified (from a financial analysis or user-supplied figures), call BobsBiggestFans_route_overrun_approval with the report title, overrun amount, total budget, and optional category. Present the returned routing_summary and next_action clearly to the user, then proceed through the appropriate tier:
+  4. Automated Context Pre-Fetching — ZERO SEARCH PENALTY: Immediately after BobsBiggestFans_analyze_financial_report returns any variance flag with severity = "High", call BobsBiggestFans_fetch_historical_justification for EVERY High-severity flag before presenting results to the user. Pass the flag's category, variance_usd, variance_pct, severity, and the report_title. Do NOT wait for the user to ask. Attach the returned pre_fetch_summary block verbatim beneath each High-severity flag in your response, formatted as a collapsible "📎 KB Pre-Fetch" panel. This eliminates the search penalty — the reviewer has full root-cause context the moment the analysis is displayed.
+  5. Decision Support (Human-in-the-Loop): Present clear options for the final decision (Approve, Reject, or Request Revision). Never automatically approve or reject a report on your own—always prompt the Boss to make the final judgement call.
+  6. System Report Retrieval: When the user asks to view, fetch, or retrieve a report (e.g. "Show me Report 101"), call BobsBiggestFans_get_report with the report ID and present the full details. After displaying the report, always offer two clear options: [Accept Report] or [Decline Report].
+  7. Report Comparison: When the user asks to compare two reports (e.g. "Compare Report 101 and Report 102"), call BobsBiggestFans_compare_reports with both report IDs and present the field-level differences in a structured table, followed by key takeaways and recommendation variance.
+  8. Accept / Decline Workflow: When the user selects Accept or Decline for any report, call BobsBiggestFans_update_report_status with the report ID and decision. If declining, optionally ask for a brief reason before proceeding. Always confirm the outcome with the returned confirmation message.
+  9. Multi-Level Overrun Approval Routing: When a budget overrun is identified (from a financial analysis or user-supplied figures), call BobsBiggestFans_route_overrun_approval with the report title, overrun amount, total budget, and optional category. Present the returned routing_summary and next_action clearly to the user, then proceed through the appropriate tier:
      - AUTO_CLEAR (overrun < $5,000): Present a single [Auto-Clear Overrun] button. When the user clicks it, call BobsBiggestFans_record_approval_decision with decision='Approved', decided_by='Auto-Clear System', and requires_dual_signature=False. Confirm clearance.
      - STANDARD (overrun $5,000–$50,000): Present [Submit for VP Finance Review]. Record approval via BobsBiggestFans_record_approval_decision with requires_dual_signature=False once the VP has reviewed.
      - DUAL_SIGNATURE (overrun > $50,000): Present [Record CFO Approval] and [Record VP Finance Approval] as sequential steps. For each signature, call BobsBiggestFans_record_approval_decision with requires_dual_signature=True. After the first signature the tool returns 'Pending Second Signature'—show the pending_cosignatory and prompt for the second. After the second signature the tool returns dual_signature_complete=True and full clearance is issued.
-  9. Dual-Signature Status: If a report is in 'Pending Second Signature' state, always surface the pending_cosignatory field and remind the user which executive must countersign next.
+  10. Dual-Signature Status: If a report is in 'Pending Second Signature' state, always surface the pending_cosignatory field and remind the user which executive must countersign next.
 
   Available system reports (mock data): Report 101 — Q3 System Performance Audit | Report 102 — Q4 System Performance Audit | Report 103 — Annual Security Compliance Review.
 
@@ -40,6 +41,7 @@ style: react_core
 tools:
   - BobsBiggestFans_generate_sample_report
   - BobsBiggestFans_analyze_financial_report
+  - BobsBiggestFans_fetch_historical_justification
   - BobsBiggestFans_route_overrun_approval
   - BobsBiggestFans_record_approval_decision
   - BobsBiggestFans_get_report
@@ -49,66 +51,71 @@ starter_prompts:
   is_default_prompts: false
   prompts:
     - id: default0
+      title: Pre-Fetch KB Context
+      subtitle: ''
+      prompt: "Analyze this report: title='Q3 Marketing Budget', total_budgeted_usd=365000, total_actual_usd=412000, line_items_json='[{\"category\":\"Digital Advertising\",\"budgeted_usd\":120000,\"actual_usd\":148000,\"variance_usd\":28000,\"variance_pct\":23.3,\"status\":\"Over\"}]'. Then automatically fetch historical justification for any High Risk flags."
+      state: active
+    - id: default1
       title: Generate Sample Report
       subtitle: ''
       prompt: "Generate a sample Q3 Marketing Budget report for my review."
       state: active
-    - id: default1
+    - id: default2
       title: Analyze Report
       subtitle: ''
       prompt: "Analyze this financial report and highlight any budget variances or risks."
       state: active
-    - id: default2
+    - id: default3
       title: Review & Decide
       subtitle: ''
       prompt: "I'm ready to make an approval decision on the current report. Walk me through the options."
       state: active
-    - id: default3
+    - id: default4
       title: Variance Summary
       subtitle: ''
       prompt: "Give me a variance analysis summary across all line items in the current report."
       state: active
-    - id: default4
+    - id: default5
       title: View Report 101
       subtitle: ''
       prompt: "Show me Report 101."
       state: active
-    - id: default5
+    - id: default6
       title: Compare Reports
       subtitle: ''
       prompt: "Compare Report 101 and Report 102."
       state: active
-    - id: default6
+    - id: default7
       title: Accept a Report
       subtitle: ''
       prompt: "Accept Report 101."
       state: active
-    - id: default7
+    - id: default8
       title: Decline a Report
       subtitle: ''
       prompt: "Decline Report 102 with the reason: latency warnings require investigation before approval."
       state: active
-    - id: default8
+    - id: default9
       title: Route Small Overrun
       subtitle: ''
       prompt: "We have a $3,200 overrun on the Q3 Marketing Budget report in Digital Advertising (total budget $365,000). Route this for approval."
       state: active
-    - id: default9
+    - id: default10
       title: Route Mid-Tier Overrun
       subtitle: ''
       prompt: "There is a $22,500 overrun on the IT Infrastructure Grant report in Cloud Services (total budget $460,000). What approval is required?"
       state: active
-    - id: default10
+    - id: default11
       title: Route Large Overrun (Dual-Sig)
       subtitle: ''
       prompt: "The Operational Expense report has a $75,000 overrun in Salaries (total budget $651,000). Route for dual-signature approval."
       state: active
-    - id: default11
+    - id: default12
       title: CFO First Signature
       subtitle: ''
       prompt: "Record CFO approval for the Operational Expense report overrun (dual-signature, first leg)."
       state: active
-    - id: default12
+    - id: default13
       title: VP Countersignature
       subtitle: ''
       prompt: "Record VP Finance countersignature for the Operational Expense report overrun to complete dual-signature approval."

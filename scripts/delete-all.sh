@@ -8,6 +8,11 @@ orchestrate agents remove -n BobsBiggestFans_Financial_Report_Review_Agent --kin
 
 echo "==> Removing tools..."
 orchestrate tools remove -n BobsBiggestFans_record_approval_decision || true
+orchestrate tools remove -n BobsBiggestFans_route_overrun_approval || true
+orchestrate tools remove -n BobsBiggestFans_update_report_status || true
+orchestrate tools remove -n BobsBiggestFans_compare_reports || true
+orchestrate tools remove -n BobsBiggestFans_get_report || true
+orchestrate tools remove -n BobsBiggestFans_fetch_historical_justification || true
 orchestrate tools remove -n BobsBiggestFans_analyze_financial_report || true
 orchestrate tools remove -n BobsBiggestFans_generate_sample_report || true
 
