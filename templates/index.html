@@ -29,6 +29,9 @@
       <button class="nav-item" data-view="approve">
         <span class="nav-icon">&#9989;</span> Approve / Reject
       </button>
+      <button class="nav-item" data-view="audit">
+        <span class="nav-icon">&#128221;</span> Audit Trail
+      </button>
     </nav>
     <!-- ── Approval Routing Card ── -->
     <div class="approval-card" id="approval-card">
@@ -240,6 +243,30 @@
         </div>
         <div id="quick-output" class="output-area" style="margin-top:1rem;">
           <p class="placeholder">Select a report and click Accept or Decline.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── AUDIT TRAIL VIEW ── -->
+    <section id="view-audit" class="view">
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Audit Trail</h3>
+          <div class="controls-row">
+            <label>Report:</label>
+            <select id="audit-report-select">
+              <option value="">— All reports —</option>
+              <option value="101">101 — Q3 System Performance Audit</option>
+              <option value="102">102 — Q4 System Performance Audit</option>
+              <option value="103">103 — Annual Security Compliance Review</option>
+              <option value="financial">Financial Analysis reports</option>
+            </select>
+            <button class="btn-primary" onclick="showAuditTrail()">View Trail</button>
+            <button class="btn-danger" style="margin-left:auto;" onclick="clearAuditTrail()">Clear All</button>
+          </div>
+        </div>
+        <div id="audit-output" class="output-area audit-output-area">
+          <p class="placeholder">Select a report and click View Trail — or choose All to see every event.</p>
         </div>
       </div>
     </section>

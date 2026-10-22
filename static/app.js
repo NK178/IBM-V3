@@ -6,6 +6,7 @@ const VIEW_TITLES = {
   financial: 'Financial Analysis',
   compare:   'Compare Reports',
   approve:   'Approve / Reject',
+  audit:     'Audit Trail',
 };
 
 function switchView(id) {
@@ -16,6 +17,8 @@ function switchView(id) {
   const btn = document.querySelector(`.nav-item[data-view="${id}"]`);
   if (btn) btn.classList.add('active');
   document.getElementById('view-title').textContent = VIEW_TITLES[id] || id;
+  // Auto-refresh the audit trail when navigating to it
+  if (id === 'audit') showAuditTrail();
 }
 
 document.querySelectorAll('.nav-item[data-view]').forEach(btn => {
@@ -87,6 +90,7 @@ async function fetchReport() {
     const res = await fetch(`/api/get_report?report_id=${id}`);
     const r = await res.json();
     out.innerHTML = renderReportCard(r);
+    auditRecord(id, 'viewed', { detail: r.title });
     loadDashboardStats();
   } catch (e) {
     out.innerHTML = `<p class="placeholder">Error fetching report: ${e.message}</p>`;
@@ -148,6 +152,9 @@ async function generateFinancialReport() {
     });
     const analysis = await analyzeRes.json();
     out.innerHTML = renderFinancialReport(report, analysis);
+    auditRecord('financial', 'generated', {
+      detail: `${report.report_title} — ${dept} | Status: ${analysis.overall_status}`,
+    });
   } catch (e) {
     out.innerHTML = `<p class="placeholder">Error: ${e.message}</p>`;
   }
@@ -241,6 +248,8 @@ async function compareReports() {
     const res = await fetch(`/api/compare_reports?report_id_a=${idA}&report_id_b=${idB}`);
     const cmp = await res.json();
     out.innerHTML = renderComparison(cmp);
+    auditRecord(idA, 'compared', { detail: `Compared with Report #${idB}` });
+    auditRecord(idB, 'compared', { detail: `Compared with Report #${idA}` });
   } catch (e) {
     out.innerHTML = `<p class="placeholder">Error: ${e.message}</p>`;
   }
@@ -302,6 +311,14 @@ async function recordDecision() {
     });
     const r = await res.json();
     out.innerHTML = renderApprovalConfirm(r);
+    // Record decision event against a synthetic key derived from the title
+    const auditKey = 'decision:' + title.toLowerCase().replace(/\s+/g, '-');
+    const eventType = dec === 'Rejected' ? 'declined' : 'decision';
+    auditRecord(auditKey, eventType, {
+      actor:  by,
+      detail: `${dec} — ${title}`,
+      reason: (dec === 'Rejected' && notes) ? notes : null,
+    });
     showToast('Decision recorded.');
     loadDashboardStats();
   } catch (e) {
@@ -357,6 +374,16 @@ async function _postDecision(reportId, dec, reason, out, append = false) {
     } else {
       out.innerHTML = html;
     }
+    // Audit
+    const id = String(reportId);
+    if (dec === 'Accept') {
+      auditRecord(id, 'signed', { detail: r.report_title });
+    } else {
+      auditRecord(id, 'declined', {
+        detail: r.report_title,
+        reason: reason || null,
+      });
+    }
     showToast(`Report ${reportId} ${dec.toLowerCase()}ed.`);
     loadDashboardStats();
   } catch (e) {
@@ -373,6 +400,128 @@ function escHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/* ── Audit Trail ── */
+
+/**
+ * Event type definitions.
+ * type key → { label, dotClass }
+ */
+const AUDIT_EVENT_TYPES = {
+  viewed:        { label: 'Report Viewed',          dotClass: 'audit-dot-viewed'        },
+  routed:        { label: 'Routed for Approval',    dotClass: 'audit-dot-routed'        },
+  signed:        { label: 'First Signature (CFO)',  dotClass: 'audit-dot-signed'        },
+  countersigned: { label: 'Countersigned (VP)',     dotClass: 'audit-dot-countersigned' },
+  declined:      { label: 'Declined',               dotClass: 'audit-dot-declined'      },
+  cleared:       { label: 'Auto-Cleared',           dotClass: 'audit-dot-cleared'       },
+  submitted:     { label: 'Submitted for Approval', dotClass: 'audit-dot-submitted'     },
+  generated:     { label: 'Financial Report Generated', dotClass: 'audit-dot-generated' },
+  compared:      { label: 'Reports Compared',       dotClass: 'audit-dot-compared'      },
+  decision:      { label: 'Decision Recorded',      dotClass: 'audit-dot-decision'      },
+};
+
+/**
+ * In-memory store: Map<reportId, AuditEntry[]>
+ * reportId is a string key; financial analyses use 'financial'.
+ * AuditEntry: { type, actor, detail, reason, ts }
+ */
+const _auditStore = new Map();
+
+/**
+ * Record one audit event.
+ * @param {string}      reportId  — e.g. '101', '103', 'financial'
+ * @param {string}      type      — key in AUDIT_EVENT_TYPES
+ * @param {object}      opts      — { actor?, detail?, reason? }
+ */
+function auditRecord(reportId, type, opts = {}) {
+  if (!_auditStore.has(reportId)) _auditStore.set(reportId, []);
+  _auditStore.get(reportId).push({
+    type,
+    actor:  opts.actor  || 'Executive',
+    detail: opts.detail || null,
+    reason: opts.reason || null,
+    ts:     new Date(),
+  });
+}
+
+/** Format a Date as HH:MM:SS */
+function _fmtTs(d) {
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+/** Format a Date as a short date+time string */
+function _fmtFull(d) {
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+       + ' ' + _fmtTs(d);
+}
+
+/** Build HTML for a single audit event row */
+function _renderAuditEvent(entry) {
+  const def = AUDIT_EVENT_TYPES[entry.type] || { label: entry.type, dotClass: 'audit-dot-viewed' };
+  const detailHtml = entry.detail
+    ? `<div class="audit-event-detail">${escHtml(entry.detail)}</div>` : '';
+  const reasonHtml = entry.reason
+    ? `<div class="audit-event-reason">Reason: ${escHtml(entry.reason)}</div>` : '';
+  return `
+    <div class="audit-event">
+      <span class="audit-dot ${def.dotClass}"></span>
+      <div class="audit-event-header">
+        <span class="audit-event-label">${escHtml(def.label)}</span>
+        <span class="audit-event-time">${_fmtFull(entry.ts)}</span>
+      </div>
+      <div class="audit-event-actor">by ${escHtml(entry.actor)}</div>
+      ${detailHtml}
+      ${reasonHtml}
+    </div>`;
+}
+
+/** Build HTML for one report's timeline group */
+function _renderAuditGroup(reportId, entries) {
+  const label = reportId === 'financial' ? 'Financial Analysis'
+              : `Report #${reportId}`;
+  const events = entries.map(_renderAuditEvent).join('');
+  return `
+    <div class="audit-group">
+      <div class="audit-group-title">${escHtml(label)} — ${entries.length} event${entries.length !== 1 ? 's' : ''}</div>
+      <div class="audit-timeline">${events}</div>
+    </div>`;
+}
+
+/** Render the audit trail view for a given filter */
+function showAuditTrail() {
+  const filter = document.getElementById('audit-report-select').value;
+  const out    = document.getElementById('audit-output');
+
+  let groups = [];
+
+  if (filter === '') {
+    // All reports, sorted by earliest event ts
+    const sorted = [..._auditStore.entries()].sort((a, b) => {
+      const aTs = a[1][0]?.ts || 0;
+      const bTs = b[1][0]?.ts || 0;
+      return aTs - bTs;
+    });
+    groups = sorted;
+  } else {
+    const entries = _auditStore.get(filter);
+    if (entries && entries.length) groups = [[filter, entries]];
+  }
+
+  if (!groups.length) {
+    out.innerHTML = '<p class="audit-empty">No audit events recorded yet for this selection. Interact with reports first.</p>';
+    return;
+  }
+
+  out.innerHTML = groups.map(([id, entries]) => _renderAuditGroup(id, entries)).join('');
+}
+
+/** Clear the entire audit store and reset the view */
+function clearAuditTrail() {
+  _auditStore.clear();
+  const out = document.getElementById('audit-output');
+  out.innerHTML = '<p class="audit-empty">Audit trail cleared.</p>';
+  showToast('Audit trail cleared.', 'success');
 }
 
 /* ── Approval Routing Card ── */
@@ -443,9 +592,23 @@ function renderApprovalCard(tierKey, report) {
     .map(a => `<li>${escHtml(a)}</li>`)
     .join('');
 
-  // Dual-sig tracker visibility
+  // Dual-sig tracker visibility + CFO pre-signed audit event
   if (tier.dualSig) {
     tracker.classList.remove('hidden');
+    // Reset tracker to initial state (CFO ✓, VP pending) each time card renders
+    const cfoDot    = document.querySelector('#tracker-step-cfo .step-dot');
+    const cfoStatus = document.querySelector('#tracker-step-cfo .step-status');
+    const vpDot     = document.querySelector('#tracker-step-vp .step-dot');
+    const vpStatus  = document.querySelector('#tracker-step-vp .step-status');
+    const conn      = document.querySelector('.tracker-connector');
+    if (cfoDot)    { cfoDot.className = 'step-dot step-done'; cfoDot.textContent = '✓'; }
+    if (cfoStatus) { cfoStatus.className = 'step-status step-status-done'; cfoStatus.textContent = 'Signed'; }
+    if (vpDot)     { vpDot.className = 'step-dot step-pending'; vpDot.textContent = ''; }
+    if (vpStatus)  { vpStatus.className = 'step-status step-status-pending'; vpStatus.textContent = 'Pending'; }
+    if (conn)      { conn.style.background = ''; }
+    // Record CFO first-signature in audit trail
+    const auditId = report.id ? String(report.id) : 'financial';
+    auditRecord(auditId, 'signed', { actor: 'CFO', detail: report.title });
   } else {
     tracker.classList.add('hidden');
   }
@@ -485,11 +648,16 @@ function resetApprovalCard() {
 function approvalNextAction() {
   if (!_currentTier || !_currentReport) return;
   const tier = APPROVAL_TIERS[_currentTier];
+  // Use report id if available, otherwise fall back to 'financial'
+  const auditId = _currentReport.id ? String(_currentReport.id) : 'financial';
 
   if (_currentTier === 'auto') {
+    auditRecord(auditId, 'cleared', { detail: _currentReport.title });
     showToast('Report auto-cleared — no manual signature required.', 'success');
   } else if (_currentTier === 'standard') {
-    showToast(`Submitted "${escHtml(_currentReport.title)}" to CFO & Finance Director.`, 'success');
+    auditRecord(auditId, 'routed',    { detail: _currentReport.title, actor: 'Executive' });
+    auditRecord(auditId, 'submitted', { detail: 'Sent to CFO & Finance Director', actor: 'Executive' });
+    showToast(`Submitted "${_currentReport.title}" to CFO & Finance Director.`, 'success');
   } else if (_currentTier === 'dual') {
     // Simulate advancing VP step
     const vpDot    = document.querySelector('#tracker-step-vp .step-dot');
@@ -506,6 +674,7 @@ function approvalNextAction() {
     nextBtn.textContent       = 'Dual-Sig Complete';
     nextBtn.style.background  = 'var(--success)';
     nextBtn.disabled          = true;
+    auditRecord(auditId, 'countersigned', { actor: 'VP Finance', detail: _currentReport.title });
     showToast('VP Finance signature recorded — dual-sig complete.', 'success');
   }
 }
@@ -519,11 +688,15 @@ fetchReport = async function () {
   // After DOM update, read the rendered report title from the output heading
   const heading = document.querySelector('#report-output .report-card h4');
   if (heading) {
-    const fakeReport = { title: heading.textContent, status: 'Pending Review' };
     const id = document.getElementById('report-id-select').value;
+    const fakeReport = { id, title: heading.textContent, status: 'Pending Review' };
     // Report 103 is the Annual Security Compliance Review → dual-sig
     const tierKey = id === '103' ? 'dual' : id === '101' ? 'standard' : 'auto';
     renderApprovalCard(tierKey, fakeReport);
+    // Emit routing event when report is first loaded into the card
+    if (tierKey !== 'auto') {
+      auditRecord(id, 'routed', { detail: `Routed as ${APPROVAL_TIERS[tierKey].label} — ${fakeReport.title}` });
+    }
   }
 };
 
@@ -534,11 +707,14 @@ generateFinancialReport = async function () {
   const banner = document.querySelector('#financial-output .status-banner');
   if (banner) {
     const text = banner.textContent || '';
-    const fakeReport = { title: text, status: 'Pending Review' };
+    const fakeReport = { id: null, title: text, status: 'Pending Review' };
     const tier = text.toLowerCase().includes('critical') ? 'dual'
                : text.toLowerCase().includes('scrutiny') ? 'standard'
                : 'auto';
     renderApprovalCard(tier, fakeReport);
+    if (tier !== 'auto') {
+      auditRecord('financial', 'routed', { detail: `Routed as ${APPROVAL_TIERS[tier].label} — ${text}` });
+    }
   }
 };
 

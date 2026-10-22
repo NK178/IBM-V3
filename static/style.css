@@ -563,6 +563,132 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 .takeaway-item { font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--border); }
 .takeaway-item:last-child { border-bottom: none; }
 
+/* ── Audit Trail Timeline ── */
+.audit-output-area {
+  min-height: 120px;
+}
+
+.audit-empty {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 13px;
+}
+
+.audit-group {
+  margin-bottom: 2rem;
+}
+
+.audit-group:last-child {
+  margin-bottom: 0;
+}
+
+.audit-group-title {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  font-weight: 700;
+  margin-bottom: 0.85rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.audit-timeline {
+  position: relative;
+  padding-left: 28px;
+}
+
+/* vertical spine */
+.audit-timeline::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.audit-event {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 1.1rem;
+}
+
+.audit-event:last-child {
+  margin-bottom: 0;
+}
+
+/* coloured dot on the spine */
+.audit-dot {
+  position: absolute;
+  left: -24px;
+  top: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--surface-2);
+  flex-shrink: 0;
+}
+
+.audit-dot-viewed        { background: var(--muted); }
+.audit-dot-routed        { background: var(--accent); }
+.audit-dot-signed        { background: var(--success); }
+.audit-dot-countersigned { background: #22d3ee; }
+.audit-dot-declined      { background: var(--danger); }
+.audit-dot-cleared       { background: var(--success); }
+.audit-dot-submitted     { background: var(--accent); }
+.audit-dot-generated     { background: #a78bfa; }
+.audit-dot-compared      { background: var(--warning); }
+.audit-dot-decision      { background: var(--warning); }
+
+.audit-event-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audit-event-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.audit-event-time {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.audit-event-actor {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.audit-event-detail {
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface);
+  border-left: 2px solid var(--border);
+  padding: 4px 8px;
+  border-radius: 0 4px 4px 0;
+  margin-top: 2px;
+}
+
+.audit-event-reason {
+  font-size: 12px;
+  color: var(--danger);
+  background: rgba(239,68,68,0.07);
+  border-left: 2px solid rgba(239,68,68,0.4);
+  padding: 4px 8px;
+  border-radius: 0 4px 4px 0;
+  margin-top: 2px;
+}
+
 /* ── Toast ── */
 .toast {
   position: fixed;
