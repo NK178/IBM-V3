@@ -15,13 +15,14 @@ If any of these are missing the dashboard still works; the chat panel just says 
 import base64
 import json
 import os
+import re
 import time
 import uuid
 
 import jwt
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from flask import Blueprint, jsonify, make_response, request
+from flask import Blueprint, current_app, jsonify, make_response, request
 
 bp = Blueprint("chat_auth", __name__)
 
@@ -31,7 +32,33 @@ _COOKIE = "ANONYMOUS-USER-ID"
 
 
 def _pem(name: str) -> bytes:
-    return os.environ.get(name, "").replace("\\n", "\n").strip().encode()
+    """Read a PEM key from the environment, forgiving common copy/paste mistakes.
+
+    Accepts real newlines or literal \\n, Windows line endings, surrounding quotes,
+    and a key pasted with its line breaks turned into spaces.
+    """
+    v = os.environ.get(name, "").strip().strip('"').strip("'").strip()
+    v = v.replace("\\\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+    m = re.match(r"^(-----BEGIN [A-Z ]+-----)\s*(.*?)\s*(-----END [A-Z ]+-----)$", v, re.S)
+    if m:  # rebuild the body: drop stray spaces/newlines, re-wrap at 64 chars
+        body = re.sub(r"\s+", "", m.group(2))
+        v = m.group(1) + "\n" + "\n".join(body[i:i + 64] for i in range(0, len(body), 64)) + "\n" + m.group(3)
+    return (v + "\n").encode() if v else b""
+
+
+def _private_key_problem() -> str | None:
+    """A plain-English reason WXO_PRIVATE_KEY can't be used, or None if it looks fine."""
+    raw = _pem("WXO_PRIVATE_KEY").decode()
+    if "PUBLIC KEY" in raw:
+        return ("WXO_PRIVATE_KEY contains a PUBLIC key. Paste private.pem there instead; "
+                "public.pem goes in watsonx Orchestrate's Embed Security tab")
+    if "PRIVATE KEY" not in raw:
+        return "WXO_PRIVATE_KEY is missing its '-----BEGIN PRIVATE KEY-----' / '-----END PRIVATE KEY-----' lines"
+    try:
+        serialization.load_pem_private_key(raw.encode(), password=None)
+    except Exception as e:
+        return f"WXO_PRIVATE_KEY could not be read ({e.__class__.__name__}); re-copy the whole private.pem"
+    return None
 
 
 def _missing() -> list[str]:
@@ -83,10 +110,16 @@ def chat_token():
         # user_payload (encrypted with IBM's public key) is only used to pass an SSO token for
         # on-behalf-of flows. We don't need that, so it's sent only if an IBM key is configured.
         if os.environ.get("IBM_PUBLIC_KEY"):
-            claims["user_payload"] = _encrypt_for_ibm({"name": "Dashboard user", "custom_user_id": user_id})
+            try:
+                claims["user_payload"] = _encrypt_for_ibm({"name": "Dashboard user", "custom_user_id": user_id})
+            except Exception as e:  # a bad optional key must not block the chat
+                current_app.logger.warning("IBM_PUBLIC_KEY is set but unusable (%s); sending token without "
+                                           "user_payload. Remove or fix IBM_PUBLIC_KEY in Render.", e)
         token = jwt.encode(claims, _pem("WXO_PRIVATE_KEY"), algorithm="RS256")
-    except Exception as e:  # bad PEM, wrong key type, payload too large for key...
-        return make_response(f"Could not create chat token: {e}", 500)
+    except Exception as e:  # bad PEM, wrong key type...
+        reason = _private_key_problem() or str(e)
+        current_app.logger.error("Chat token failed: %s", reason)
+        return make_response(f"Could not create chat token: {reason}", 500)
 
     resp = make_response(token)
     resp.mimetype = "text/plain"
