@@ -26,6 +26,7 @@ Write-Host "==> Importing tools..."
 & $orchestrate tools import -k python -f tools/BobsBiggestFans_search_reports.py -a bobs_report_api
 & $orchestrate tools import -k python -f tools/BobsBiggestFans_request_revision.py -a bobs_report_api
 & $orchestrate tools import -k python -f tools/BobsBiggestFans_submit_revision.py -a bobs_report_api
+& $orchestrate tools import -k python -f tools/BobsBiggestFans_get_sla_status.py -a bobs_report_api
 
 Write-Host "==> Importing agent..."
 & $orchestrate agents import -f agents/BobsBiggestFans_Financial_Report_Review_Agent.yaml
