@@ -185,3 +185,7 @@ mark { background: rgba(245, 158, 11, 0.3); color: inherit; border-radius: 2px; 
   .lib-meta { flex-direction: row; align-items: center; }
 }
 .rev-request { border-left: 3px solid #c084fc; padding: 0.4rem 0.75rem; background: rgba(192, 132, 252, 0.08); border-radius: 4px; }
+
+/* ── Site name in the sidebar: long, so let it wrap instead of overflowing ── */
+.sidebar-brand { align-items: flex-start; }
+.brand-name { font-size: 14px; line-height: 1.3; overflow-wrap: break-word; min-width: 0; }
